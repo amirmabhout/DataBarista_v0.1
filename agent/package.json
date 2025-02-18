@@ -38,6 +38,7 @@
         "@elizaos/client-alexa": "workspace:*",
         "@elizaos/client-simsai": "workspace:*",
         "@elizaos/core": "workspace:*",
+        "@elizaos/plugin-databarista": "workspace:*",
         "@elizaos/plugin-0g": "workspace:*",
         "@elizaos/plugin-abstract": "workspace:*",
         "@elizaos/plugin-agentkit": "workspace:*",
