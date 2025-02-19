@@ -16,7 +16,7 @@ Your response must include one of the options.`;
 
 export const parseShouldRespondFromText = (
     text: string
-): "RESPOND" | "IGNORE" | "STOP" | null => {
+): "RESPOND" | "IGNORE" | "STOP" => {
     const match = text
         .split("\n")[0]
         .trim()
@@ -32,7 +32,7 @@ export const parseShouldRespondFromText = (
         ? "IGNORE"
         : text.includes("STOP")
         ? "STOP"
-        : null;
+        : "RESPOND"; // Default to RESPOND if no match found
 };
 
 export const booleanFooter = `Respond with only a YES or a NO.`;

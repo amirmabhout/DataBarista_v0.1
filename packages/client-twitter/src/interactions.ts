@@ -62,7 +62,7 @@ Here is the descriptions of images in the Current post.
 ` + messageCompletionFooter;
 
 export const twitterShouldRespondTemplate = (targetUsersStr: string) =>
-    `# INSTRUCTIONS: Determine if {{agentName}} (@{{twitterUserName}}) should respond to the message and participate in the conversation. Do not comment. Just respond with "true" or "false".
+    `# INSTRUCTIONS: Determine if {{agentName}} (@{{twitterUserName}}) should respond to the message and participate in the conversation.
 
 Response options are RESPOND, IGNORE and STOP.
 
