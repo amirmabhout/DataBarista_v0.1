@@ -12,7 +12,7 @@ PREFIX datalatte: <https://datalatte.com/ns/>
 PREFIX foaf:      <http://xmlns.com/foaf/0.1/>
 PREFIX rdf:       <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
-SELECT ?person ?accountName ?name ?background ?knowledgeDomain ?privateDetails ?personTimestamp
+SELECT ?person ?accountName ?accountPlatform ?name ?background ?knowledgeDomain ?privateDetails ?personTimestamp
        ?latestIntent ?intentTimestamp ?summary ?allDesiredConnections ?projDesc ?challenge ?url ?relatedProject
        ?latestProject ?projectTimestamp ?projectName ?projectDescriptionFull ?projectType ?projectDomain ?projectTechStack
 WHERE {
@@ -24,14 +24,16 @@ WHERE {
            (MAX(?bg) AS ?background)
            (MAX(?kd) AS ?knowledgeDomain)
            (MAX(?pd) AS ?privateDetails)
-           (MAX(?accName) AS ?accountName)
+           (MAX(?accUsername) AS ?accountName)
+           (MAX(?accPlatform) AS ?accountPlatform)
     WHERE {
       ?person rdf:type foaf:Person ;
-              foaf:account ?account .
-      ?account a foaf:OnlineAccount ;
-               foaf:accountServiceHomepage "{{platform}}" ;
-               foaf:accountName "{{username}}" ;
-               foaf:accountName ?accName .
+              datalatte:hasAccount ?account .
+      ?account a datalatte:Account ;
+               datalatte:accountPlatform ?accPlatform ;
+               datalatte:accountUsername ?accUsername .
+      FILTER( LCASE(STR(?accPlatform)) = LCASE("{{platform}}") )
+      FILTER( LCASE(STR(?accUsername)) = LCASE("{{username}}") )
       OPTIONAL { ?person foaf:name ?nameVal. }
       OPTIONAL { ?person datalatte:background ?bg. }
       OPTIONAL { ?person datalatte:knowledgeDomain ?kd. }

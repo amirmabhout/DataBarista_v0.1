@@ -18,7 +18,7 @@ Task:
 From the above data, choose the best match that aligns with the user's interests.
 Generate a friendly social media post that introduces the user and the best match together.
 The post should:
-1. Use the proper @username for both user (from user profile's accountName) and the best match chosen (from match's accountName)
+1. Use the proper @username for both user and the best match chosen
 2. Highlight their synergy and how they might help solve each other
 3. Do not use hashtags
 
@@ -52,41 +52,44 @@ Task:
 Generate a SPARQL query that finds potential matching profiles in the Decentralized Knowledge Graph (DKG) based on both the user profile and recent messages. The query must:
 
 1. **Exclude the User's Own Profile:**  
-   Filter out any ?person that has a foaf:account with both:  
-   - foaf:accountServiceHomepage equal to "{{platform}}" (e.g. "telegram")  
-   - foaf:accountName that matches "{{username}}" (case-insensitive)
+   Filter out any ?person that has a datalatte:hasAccount with both:  
+   - datalatte:accountPlatform equal to "{{platform}}" (e.g. "telegram")  
+   - datalatte:accountUsername that matches "{{username}}" (case-insensitive)
 
-2. **Dynamic Multiple-Keyword Filtering:**  
+2. **Restrict to Same Account Platform:**  
+   Only consider profiles where their datalatte:hasAccount has datalatte:accountPlatform equal to "{{platform}}".
+
+3. **Dynamic Multiple-Keyword Filtering:**  
    Dynamically derive multiple keywords (at least two or three per field) from the user's profile and conversation context. For example:
    - For datalatte:knowledgeDomain: derive keywords from the user's "knowledgeDomain" (e.g. "Artificial Intelligence", "AI", "Machine Learning")
    - For datalatte:background: derive keywords from the user's "background" (e.g. "matchmaking", "ai agent", "feedback")
    - For datalatte:desiredConnections (bound as ?allDesiredConnections): derive keywords from the user's role or desired partner traits (e.g. "ai enthusiasts", "developer", "researcher")
    - For the project's domain (?projectDomain): derive keywords from the user's project domain (e.g. "Artificial Intelligence", "Machine Learning", "tech")
 
-3. **Candidate Matching:**  
+4. **Candidate Matching:**  
    Look for candidates where any of the following OPTIONAL fields (case-insensitive, using COALESCE to default missing values to an empty string) contain **at least one** of the derived keywords:
    - datalatte:knowledgeDomain
    - datalatte:background
    - datalatte:desiredConnections (bound as ?allDesiredConnections)
-   - datalatte:domain from the related project
+   - datalatte:projectDomain from the related project
 
-4. **Result Ordering and Limiting:**  
+5. **Result Ordering and Limiting:**  
    Order results by the most recent intent timestamp and limit the results to 15.
 
-5. **Select Clause:**  
+6. **Select Clause:**  
    Ensure the SELECT clause returns:
-   - ?person, ?accountName (as username), ?knowledgeDomain, ?background, ?allDesiredConnections, ?projectDomain, ?projectType, ?challenge, ?intentTimestamp, ?projectName, and ?projectDescription.
+   - ?person, ?accountUsername (as username), ?knowledgeDomain, ?background, ?allDesiredConnections, ?projectDomain, ?projectType, ?challenge, ?intentTimestamp, ?projectName, and ?projectDescription.
 
 **Dynamic Filtering Section:**  
 Construct the FILTER clause so that it checks if any candidate field (after applying COALESCE and LCASE) matches a regex pattern containing one or more of the derived keywords. Replace the placeholder keywords below with the actual values:
 - For datalatte:knowledgeDomain: "{{kKeyword1}}", "{{kKeyword2}}", "{{kKeyword3}}"
 - For datalatte:background: "{{bKeyword1}}", "{{bKeyword2}}", "{{bKeyword3}}"
 - For datalatte:desiredConnections: "{{dKeyword1}}", "{{dKeyword2}}", "{{dKeyword3}}"
-- For datalatte:domain: "{{pKeyword1}}", "{{pKeyword2}}", "{{pKeyword3}}"
+- For datalatte:projectDomain: "{{pKeyword1}}", "{{pKeyword2}}", "{{pKeyword3}}"
 
 **Example Output:**
 [{
-  "query": "PREFIX schema: <http://schema.org/> PREFIX datalatte: <https://datalatte.com/ns/> PREFIX foaf: <http://xmlns.com/foaf/0.1/> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> SELECT DISTINCT ?person ?accountName ?knowledgeDomain ?background ?allDesiredConnections ?projectDomain ?projectType ?challenge ?intentTimestamp ?projectName ?projectDescription WHERE { { SELECT ?person (MAX(?ts) AS ?intentTimestamp) { ?person datalatte:hasIntent/datalatte:revisionTimestamp ?ts . } GROUP BY ?person } ?person a foaf:Person ; foaf:account ?account . ?account foaf:accountName ?accountName . OPTIONAL { ?person datalatte:knowledgeDomain ?knowledgeDomain. } OPTIONAL { ?person datalatte:background ?background. } OPTIONAL { ?person datalatte:hasIntent ?intent. } OPTIONAL { ?intent datalatte:desiredConnections ?allDesiredConnections ; datalatte:challenge ?challenge ; datalatte:relatedTo ?project . OPTIONAL { ?project datalatte:type ?projectType. } OPTIONAL { ?project datalatte:domain ?projectDomain. } OPTIONAL { ?project foaf:name ?projectName. } OPTIONAL { ?project schema:description ?projectDescription. } } FILTER NOT EXISTS { ?person foaf:account ?userAccount . ?userAccount foaf:accountServiceHomepage \"{{platform}}\" ; foaf:accountName ?userName . FILTER( LCASE(STR(?userName)) = LCASE(\"{{username}}\") ) } FILTER ( regex(LCASE(COALESCE(STR(?knowledgeDomain), \"\")), \"{{kKeyword1}}|{{kKeyword2}}|{{kKeyword3}}\") || regex(LCASE(COALESCE(STR(?background), \"\")), \"{{bKeyword1}}|{{bKeyword2}}|{{bKeyword3}}\") || regex(LCASE(COALESCE(STR(?allDesiredConnections), \"\")), \"{{dKeyword1}}|{{dKeyword2}}|{{dKeyword3}}\") || regex(LCASE(COALESCE(STR(?projectDomain), \"\")), \"{{pKeyword1}}|{{pKeyword2}}|{{pKeyword3}}\") ) } ORDER BY DESC(?intentTimestamp) LIMIT 15"
+  "query": "PREFIX schema: <http://schema.org/> PREFIX datalatte: <https://datalatte.com/ns/> PREFIX foaf: <http://xmlns.com/foaf/0.1/> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> SELECT DISTINCT ?person ?accountUsername ?knowledgeDomain ?background ?allDesiredConnections ?projectDomain ?projectType ?challenge ?intentTimestamp ?projectName ?projectDescription WHERE { { SELECT ?person (MAX(?ts) AS ?intentTimestamp) { ?person datalatte:hasIntent/datalatte:revisionTimestamp ?ts . } GROUP BY ?person } ?person a foaf:Person ; datalatte:hasAccount ?account . ?account datalatte:accountUsername ?accountUsername ; datalatte:accountPlatform ?accountPlatform . FILTER( LCASE(STR(?accountPlatform)) = LCASE(\"{{platform}}\") ) OPTIONAL { ?person datalatte:knowledgeDomain ?knowledgeDomain. } OPTIONAL { ?person datalatte:background ?background. } OPTIONAL { ?person datalatte:hasIntent ?intent. OPTIONAL { ?intent datalatte:desiredConnections ?allDesiredConnections ; datalatte:challenge ?challenge ; datalatte:relatedTo ?project . OPTIONAL { ?project datalatte:type ?projectType. } OPTIONAL { ?project datalatte:projectDomain ?projectDomain. } OPTIONAL { ?project foaf:name ?projectName. } OPTIONAL { ?project schema:description ?projectDescription. } } } FILTER NOT EXISTS { ?person datalatte:hasAccount ?userAccount . ?userAccount datalatte:accountPlatform \"{{platform}}\" ; datalatte:accountUsername ?userName . FILTER( LCASE(STR(?userName)) = LCASE(\"{{username}}\") ) } FILTER ( regex(LCASE(COALESCE(STR(?knowledgeDomain), \"\")), \"{{kKeyword1}}|{{kKeyword2}}|{{kKeyword3}}\") || regex(LCASE(COALESCE(STR(?background), \"\")), \"{{bKeyword1}}|{{bKeyword2}}|{{bKeyword3}}\") || regex(LCASE(COALESCE(STR(?allDesiredConnections), \"\")), \"{{dKeyword1}}|{{dKeyword2}}|{{dKeyword3}}\") || regex(LCASE(COALESCE(STR(?projectDomain), \"\")), \"{{pKeyword1}}|{{pKeyword2}}|{{pKeyword3}}\") ) } ORDER BY DESC(?intentTimestamp) LIMIT 15"
 }]
 `;
 
@@ -156,10 +159,10 @@ Format response as array:
       "@type": "foaf:Person",
       "@id": "urn:uuid:{{uuid}}",
       "datalatte:revisionTimestamp": "{{timestamp}}",
-      "foaf:account": {
-        "@type": "foaf:OnlineAccount",
-        "foaf:accountServiceHomepage": "{{platform}}",
-        "foaf:accountName": "{{username}}"
+      "datalatte:hasAccount": {
+        "@type": "datalatte:Account",
+        "datalatte:accountPlatform": "{{platform}}",
+        "datalatte:accountUsername": "{{username}}"
       },
       "datalatte:background": "<Private biography or contextual background (e.g., 'Founder of an AI analytics startup')>",
       "datalatte:knowledgeDomain": "<Primary field, e.g., 'Web3', 'DeFi', 'NFT'>",
@@ -175,7 +178,7 @@ Format response as array:
         "foaf:name": "<Project title, e.g., 'NFT Art Marketplace'>",
         "schema:description": "<Project description summary>",
         "datalatte:type": "<Classification, e.g., 'marketplace', 'protocol', 'DAO tool', 'game', 'platform'>",
-        "datalatte:domain": "<Project domain, e.g., 'Web3', 'blockchain', 'metaverse'>",
+        "datalatte:projectDomain": "<Project domain, e.g., 'Web3', 'blockchain', 'metaverse'>",
         "datalatte:techStack": "<Technical details or technology stack used>"
       }
     }

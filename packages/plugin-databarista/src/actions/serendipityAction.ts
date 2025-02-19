@@ -173,8 +173,8 @@ import {
         }
   
         const rawProfile = profileResult.data[0];
-        if (!rawProfile.projectDomain || !rawProfile.allDesiredConnections) {
-          callback({ text: "Your profile seems incomplete. Please make sure to specify your knowledge domain, project domain, and desired connections when publishing to DKG." });
+        if (!rawProfile.allDesiredConnections) {
+          callback({ text: "Your profile seems incomplete. please tell me more about your background and project to see whom best to match with you." });
           return false;
         }
   

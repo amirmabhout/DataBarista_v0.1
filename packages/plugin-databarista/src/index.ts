@@ -2,6 +2,7 @@ import type { Plugin } from "@elizaos/core";
 import { noneAction } from "./actions/noneAction";
 import { publishIntent2Dkg } from "./actions/publishIntent2Dkg";
 import { serendipity } from "./actions/serendipityAction";
+//import { simSynteticProfile } from "./actions/simSynteticProfile";
 import { userProfileProvider } from "./providers/userProfileProvider";
 
 export * as actions from "./actions";
@@ -15,6 +16,7 @@ export const databaristaPlugin: Plugin = {
         publishIntent2Dkg,
         serendipity,
         noneAction,
+        //simSynteticProfile,
     ],
     evaluators: [],
     providers: [userProfileProvider],

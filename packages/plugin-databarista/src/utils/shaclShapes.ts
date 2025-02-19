@@ -53,7 +53,7 @@ datalatte:PersonShape
   
   # Domain: primary field (e.g., Web3, DeFi, NFT)
   sh:property [
-      sh:path datalatte:domain ;
+      sh:path datalatte:knowledgeDomain ;
       sh:datatype xsd:string ;
       sh:minCount 1 ;
       sh:description "Primary field (e.g., Web3, DeFi, NFT)." ;
@@ -90,13 +90,13 @@ datalatte:PersonShape
 datalatte:AccountShape
   a sh:NodeShape ;
   sh:property [
-    sh:path datalatte:platform ;
+    sh:path datalatte:accountPlatform ;
     sh:datatype xsd:string ;
     sh:minCount 1 ;
     sh:description "Platform of the account (e.g., Twitter, GitHub)." ;
   ] ;
   sh:property [
-    sh:path datalatte:username ;
+    sh:path datalatte:accountUsername ;
     sh:datatype xsd:string ;
     sh:minCount 1 ;
     sh:description "Username on the given platform." ;
@@ -187,7 +187,7 @@ datalatte:ProjectShape
     sh:description "Classification of the project (e.g., marketplace, protocol, DAO tool, game, platform)." ;
   ] ;
   sh:property [
-    sh:path datalatte:domain ;
+    sh:path datalatte:projectDomain ;
     sh:datatype xsd:string ;
     sh:minCount 1 ;
     sh:description "Domain of the project (e.g., Web3, blockchain, metaverse)." ;
