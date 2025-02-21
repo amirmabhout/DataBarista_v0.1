@@ -104,6 +104,8 @@ Recent Messages:
 
 Existing knowledge related to the person:
 {{userProfileData}}
+username: {{username}}
+platform: {{platform}}
 
 SHACL Shapes for Validation:
 {{shaclShapes}}
