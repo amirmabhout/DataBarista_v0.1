@@ -97,19 +97,7 @@ async function getMatchingProfiles(
     elizaLogger.info("================================");
 
     if (!result.data) return [];
-
-    return result.data.map((candidate: any) => ({
-      ...candidate,
-      username: candidate.accountName?.replace(/^"|"$/g, ''),
-      name: candidate.name?.replace(/^"|"$/g, ''),
-      knowledgeDomain: candidate.knowledgeDomain?.replace(/^"|"$/g, ''),
-      desiredConnections: candidate.allDesiredConnections?.replace(/^"|"$/g, ''),
-      projectType: candidate.projectType?.replace(/^"|"$/g, ''),
-      projectDomain: candidate.projectDomain?.replace(/^"|"$/g, ''),
-      challenge: candidate.challenge?.replace(/^"|"$/g, ''),
-      projectName: candidate.projectName?.replace(/^"|"$/g, ''),
-      projectDescription: candidate.projectDescription?.replace(/^"|"$/g, '')
-    }));
+    return result.data;
   } catch (error) {
     elizaLogger.error("=== Serendipity Search Error ===");
     elizaLogger.error("SPARQL query failed:", error);
