@@ -15,6 +15,7 @@ import {
   import { MATCH_PROMPT_TEMPLATE, MATCH_QUERY_TEMPLATE } from "../utils/promptTemplates";
   import { SHACL_SHAPES } from "../utils/shaclShapes";
   import { DkgClientConfig } from "../utils/types";
+  import { profileCache } from "../utils/profileCache";
   
   let DkgClient: any = null;
   
@@ -161,18 +162,28 @@ import {
         elizaLogger.info("=== User Profile Query ===");
         elizaLogger.info(profileQuery);
         elizaLogger.info("=========================");
-  
-        const profileResult = await DkgClient.graph.query(profileQuery, "SELECT");
-        elizaLogger.info("=== User Profile Result ===");
-        elizaLogger.info(JSON.stringify(profileResult.data?.[0] || {}, null, 2));
-        elizaLogger.info("==========================");
-  
-        if (!profileResult.data?.length) {
-          callback({ text: "Please publish your profile first using 'publish to dkg'" });
-          return false;
+
+        // Try to get profile from cache first
+        let profileData = profileCache.get(platform, username);
+
+        if (!profileData) {
+          elizaLogger.info("No cached profile found, querying DKG");
+          const profileResult = await DkgClient.graph.query(profileQuery, "SELECT");
+          elizaLogger.info("=== User Profile Result ===");
+          elizaLogger.info(JSON.stringify(profileResult.data?.[0] || {}, null, 2));
+          elizaLogger.info("==========================");
+
+          if (!profileResult.data?.length) {
+            callback({ text: "Please publish your profile first using 'publish to dkg'" });
+            return false;
+          }
+
+          profileData = profileResult.data;
+          // Cache the profile data
+          profileCache.set(platform, username, profileData);
         }
   
-        const rawProfile = profileResult.data[0];
+        const rawProfile = profileData[0];
         if (!rawProfile.allDesiredConnections) {
           callback({ text: "Your profile seems incomplete. please tell me more about your background and project to see whom best to match with you." });
           return false;
@@ -192,7 +203,7 @@ import {
         // Prepare LLM context for generating a social media post
         const postGenerationState = {
           ...state,
-          userProfileData: JSON.stringify(profileResult.data[0], null, 2),
+          userProfileData: JSON.stringify(profileData[0], null, 2),
           matchesData: JSON.stringify(candidates, null, 2)
         };
   

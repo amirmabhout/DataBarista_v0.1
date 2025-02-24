@@ -3,6 +3,7 @@ import { Provider, IAgentRuntime, Memory, State, elizaLogger } from "@elizaos/co
 import DKG from "dkg.js";
 import { USER_PROFILE_QUERY } from "../utils/sparqlQueries";
 import { DkgClientConfig } from "../utils/types";
+import { profileCache } from "../utils/profileCache";
 
 let DkgClient: any = null;
 
@@ -39,28 +40,43 @@ const userProfileProvider: Provider = {
             const clients = runtime.clients;
             let platform = Object.keys(clients)[0];
 
-            elizaLogger.info("Checking DKG for user data:", {
+            elizaLogger.info("Checking for cached user data:", {
                 username,
                 platform
             });
 
-            // Query for user data
-            const userDataQuery = USER_PROFILE_QUERY
-                .replace("{{platform}}", platform)
-                .replace("{{username}}", username);
+            // Try to get data from cache first
+            let userData = profileCache.get(platform, username);
 
-            let userData;
-            try {
-                const queryResult = await DkgClient.graph.query(userDataQuery, "SELECT");
-                elizaLogger.info("User data query result:", {
-                    status: queryResult.status,
-                    data: queryResult.data
+            // If not in cache, query DKG
+            if (userData === null) { // explicitly check for null since empty array is valid
+                elizaLogger.info("No cached data found, querying DKG:", {
+                    username,
+                    platform
                 });
-                
-                userData = queryResult.data;
-            } catch (error) {
-                elizaLogger.error("Error querying user data:", error);
-                return null;
+
+                // Query for user data
+                const userDataQuery = USER_PROFILE_QUERY
+                    .replace("{{platform}}", platform)
+                    .replace("{{username}}", username);
+
+                try {
+                    const queryResult = await DkgClient.graph.query(userDataQuery, "SELECT");
+                    elizaLogger.info("User data query result:", {
+                        status: queryResult.status,
+                        data: queryResult.data
+                    });
+                    
+                    userData = queryResult.data;
+
+                    // Always cache the result, even if empty
+                    profileCache.set(platform, username, userData);
+                } catch (error) {
+                    elizaLogger.error("Error querying user data:", error);
+                    // Cache empty result on error to prevent repeated failed queries
+                    profileCache.set(platform, username, []);
+                    return null;
+                }
             }
 
             // If no data found

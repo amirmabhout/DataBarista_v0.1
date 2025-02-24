@@ -20,6 +20,11 @@ import {
 import type { ClientBase } from "./base";
 import { buildConversationThread, sendTweet, wait } from "./utils.ts";
 
+// deleted this part after post directions in template below:
+// Recent interactions between {{agentName}} and other users:
+// {{recentPostInteractions}}
+// {{recentPosts}}
+77 
 export const twitterMessageHandlerTemplate =
     `
 # Areas of Expertise
@@ -36,10 +41,6 @@ export const twitterMessageHandlerTemplate =
 
 {{postDirections}}
 
-Recent interactions between {{agentName}} and other users:
-{{recentPostInteractions}}
-
-{{recentPosts}}
 
 # TASK: Generate a post/reply in the voice, style and perspective of {{agentName}} (@{{twitterUserName}}) while using the thread of tweets as additional context:
 

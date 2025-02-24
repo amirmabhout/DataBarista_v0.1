@@ -16,8 +16,44 @@ import { USER_PROFILE_QUERY } from "../utils/sparqlQueries";
 import { MATCH_PROMPT_TEMPLATE, KG_EXTRACTION_TEMPLATE, MATCH_QUERY_TEMPLATE } from "../utils/promptTemplates";
 import { SHACL_SHAPES } from "../utils/shaclShapes";
 import { DkgClientConfig } from "../utils/types";
+import { profileCache } from "../utils/profileCache";
 
 let DkgClient: any = null;
+
+async function getOrFetchUserProfile(
+  dkgClient: any,
+  platform: string,
+  username: string,
+  forceRefresh: boolean = false
+): Promise<any> {
+  // If forceRefresh is true, invalidate the cache first
+  if (forceRefresh) {
+    elizaLogger.info("Forcing cache refresh for user profile:", { platform, username });
+    profileCache.invalidate(platform, username);
+  }
+
+  // Try to get from cache first
+  let profileData = profileCache.get(platform, username);
+  if (profileData) {
+    elizaLogger.info("Using cached user profile data for:", { platform, username });
+    return profileData;
+  }
+
+  // If not in cache, query DKG
+  elizaLogger.info("Fetching user profile from DKG for:", { platform, username });
+  const profileQuery = USER_PROFILE_QUERY
+    .replace("{{platform}}", platform)
+    .replace("{{username}}", username);
+
+  const queryResult = await dkgClient.graph.query(profileQuery, "SELECT");
+  
+  if (queryResult.data?.length > 0) {
+    // Cache the result
+    profileCache.set(platform, username, queryResult.data);
+  }
+  
+  return queryResult.data;
+}
 
 async function generateMatchingQuery(
   runtime: IAgentRuntime,
@@ -170,31 +206,9 @@ export const publishIntent2Dkg: Action = {
         platform
       });
 
-      // First, check for existing user profile in edge node
-      const userProfileSPARQLQuery = USER_PROFILE_QUERY.replace("{{platform}}", platform).replace(
-        "{{username}}",
-        username
-      );
-
-      elizaLogger.info("Querying for user profile in edge node:", {
-        query: userProfileSPARQLQuery,
-      });
-
-      let userProfileData;
-      try {
-        const queryResult = await DkgClient.graph.query(userProfileSPARQLQuery, "SELECT");
-        elizaLogger.info("Existing user profile via sparql query:", {
-          status: queryResult.status,
-          dataLength: queryResult.data?.length,
-          data: queryResult.data,
-        });
-
-        userProfileData = queryResult.data;
-      } catch (error) {
-        elizaLogger.error("Error querying user profile:", error);
-        userProfileData = [];
-      }
-
+      // Get existing user profile data (from cache or DKG)
+      const userProfileData = await getOrFetchUserProfile(DkgClient, platform, username);
+      
       // Update state with recent messages and existing intentions
       if (!state) {
         state = await runtime.composeState(message);
@@ -204,12 +218,12 @@ export const publishIntent2Dkg: Action = {
       // Generate a new intention ID that will only be used if needed
       const newIntentionId = `int_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const newProjectId = `int_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      state.intentid = newIntentionId; // This may be replaced by an existing ID
-      state.projectid = newProjectId; // This may be replaced by an existing ID
+      state.intentid = newIntentionId;
+      state.projectid = newProjectId;
       state.uuid = message.userId;
       state.platform = platform;
       state.username = username;
-      state.timestamp = new Date().toISOString(); // Add current timestamp in ISO format
+      state.timestamp = new Date().toISOString();
       state.userProfileData = JSON.stringify(userProfileData || [], null, 2);
       state.shaclShapes = SHACL_SHAPES;
 
@@ -238,7 +252,6 @@ export const publishIntent2Dkg: Action = {
           username: state.username,
         },
       });
-      elizaLogger.info("=====================================");
 
       const result = await generateObjectArray({
         runtime,
@@ -284,7 +297,6 @@ export const publishIntent2Dkg: Action = {
       elizaLogger.info("Private JSON-LD:", {
         data: JSON.stringify(privateJsonLd, null, 2),
       });
-      elizaLogger.info("================================");
 
       // Publish to DKG
       elizaLogger.info("Publishing professional intention to DKG with client config:", {
@@ -303,7 +315,7 @@ export const publishIntent2Dkg: Action = {
             public: publicJsonLd,
             private: privateJsonLd,
           },
-          { epochsNum: 3 } // keeping this intention in the DKG for 3 months only
+          { epochsNum: 3 }
         );
 
         elizaLogger.info("DKG asset creation request completed successfully");
@@ -316,7 +328,6 @@ export const publishIntent2Dkg: Action = {
               : "https://dkg-testnet.origintrail.io/explore?ual="
           }${createAssetResult.UAL}`
         );
-        elizaLogger.info("===============================");
 
         // Send the first callback for successful publishing
         callback({
@@ -330,25 +341,13 @@ export const publishIntent2Dkg: Action = {
         // Add a delay to allow DKG indexing
         await new Promise((resolve) => setTimeout(resolve, 5000));
 
-        // Query for the user's profile including the newly published intent
-        const profileQuery = USER_PROFILE_QUERY
-          .replace("{{platform}}", platform)
-          .replace("{{username}}", username);
-
-        elizaLogger.info("=== User Profile Query After Publishing ===");
-        elizaLogger.info(profileQuery);
-        elizaLogger.info("=========================================");
-
-        const profileResult = await DkgClient.graph.query(profileQuery, "SELECT");
-        elizaLogger.info("=== User Profile Result After Publishing ===");
-        elizaLogger.info(JSON.stringify(profileResult.data?.[0] || {}, null, 2));
-        elizaLogger.info("==========================================");
-
-        if (!profileResult.data?.length) {
+        // Get updated profile data after publishing, forcing a cache refresh
+        const updatedProfileData = await getOrFetchUserProfile(DkgClient, platform, username, true);
+        if (!updatedProfileData?.length) {
           return true; // Already published successfully, so return true even if matching fails
         }
 
-        const candidates = await getMatchingProfiles(runtime, profileResult.data[0], platform, username, state);
+        const candidates = await getMatchingProfiles(runtime, updatedProfileData[0], platform, username, state);
         if (!candidates.length) {
           callback({ text: "No matches found yet. I'll keep searching!" });
           return true;
@@ -357,14 +356,13 @@ export const publishIntent2Dkg: Action = {
         // Prepare LLM context for generating a social media post
         const postGenerationState = {
           ...state,
-          userProfileData: JSON.stringify(profileResult.data[0], null, 2),
+          userProfileData: JSON.stringify(updatedProfileData[0], null, 2),
           matchesData: JSON.stringify(candidates, null, 2)
         };
 
         elizaLogger.info("=== State Before Template Merge ===");
         elizaLogger.info("User Profile Data:", postGenerationState.userProfileData);
         elizaLogger.info("Matches Data:", postGenerationState.matchesData);
-        elizaLogger.info("=================================");
 
         const context = composeContext({
           template: MATCH_PROMPT_TEMPLATE,
@@ -373,7 +371,6 @@ export const publishIntent2Dkg: Action = {
 
         elizaLogger.info("=== Final Prompt After Template Merge ===");
         elizaLogger.info(context);
-        elizaLogger.info("=======================================");
 
         // Generate the post text from the candidate profiles
         const postResult = await generateObjectArray({

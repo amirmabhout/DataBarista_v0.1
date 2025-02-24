@@ -93,5 +93,5 @@ WHERE {
   }
 }
 ORDER BY DESC(?personTimestamp)
-LIMIT 10
+LIMIT 3
 `;
