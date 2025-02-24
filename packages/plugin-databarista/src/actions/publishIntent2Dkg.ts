@@ -142,6 +142,50 @@ async function getMatchingProfiles(
   }
 }
 
+async function publishToDkg(
+  dkgClient: any,
+  publicJsonLd: any,
+  privateJsonLd: any,
+  runtime: IAgentRuntime
+): Promise<void> {
+  try {
+    elizaLogger.info("Publishing professional intention to DKG with client config:", {
+      environment: runtime.getSetting("DKG_ENVIRONMENT"),
+      endpoint: runtime.getSetting("DKG_HOSTNAME"),
+      port: runtime.getSetting("DKG_PORT"),
+      blockchain: runtime.getSetting("DKG_BLOCKCHAIN_NAME"),
+    });
+
+    elizaLogger.info("Initializing DKG asset creation...");
+    const createAssetResult = await dkgClient.asset.create(
+      {
+        public: publicJsonLd,
+        private: privateJsonLd,
+      },
+      { epochsNum: 3 }
+    );
+
+    elizaLogger.info("DKG asset creation request completed successfully");
+    elizaLogger.info("=== Knowledge Asset Created ===");
+    elizaLogger.info(`UAL: ${createAssetResult.UAL}`);
+    elizaLogger.info(
+      `DKG Explorer Link: ${
+        runtime.getSetting("DKG_ENVIRONMENT") === "mainnet"
+          ? "https://dkg.origintrail.io/explore?ual="
+          : "https://dkg-testnet.origintrail.io/explore?ual="
+      }${createAssetResult.UAL}`
+    );
+  } catch (error) {
+    elizaLogger.error("Error occurred while publishing intents to DKG:", error.message);
+    if (error.stack) {
+      elizaLogger.error("Stack trace:", error.stack);
+    }
+    if (error.response) {
+      elizaLogger.error("Response data:", JSON.stringify(error.response.data, null, 2));
+    }
+  }
+}
+
 export const publishIntent2Dkg: Action = {
   name: "PUBLISH_DKG_INTENT",
   similes: ["PUBLISH_INTENTION_TO_DKG", "SAVE_INTENTION_TO_DKG", "STORE_INTENTION_IN_DKG"],
@@ -298,107 +342,67 @@ export const publishIntent2Dkg: Action = {
         data: JSON.stringify(privateJsonLd, null, 2),
       });
 
-      // Publish to DKG
-      elizaLogger.info("Publishing professional intention to DKG with client config:", {
-        environment: runtime.getSetting("DKG_ENVIRONMENT"),
-        endpoint: runtime.getSetting("DKG_HOSTNAME"),
-        port: runtime.getSetting("DKG_PORT"),
-        blockchain: runtime.getSetting("DKG_BLOCKCHAIN_NAME"),
+      // Update cache with combined JSON-LD data
+      const newProfileData = {
+        ...privateJsonLd,
+        ...publicJsonLd
+      };
+
+      profileCache.set(platform, username, [newProfileData]);
+      elizaLogger.info("Cache updated with combined profile data");
+
+      // Start DKG publishing asynchronously
+      publishToDkg(DkgClient, publicJsonLd, privateJsonLd, runtime).catch(error => {
+        elizaLogger.error("Async DKG publishing failed:", error);
       });
 
-      let createAssetResult;
-      try {
-        elizaLogger.info("Initializing DKG asset creation...");
-
-        createAssetResult = await DkgClient.asset.create(
-          {
-            public: publicJsonLd,
-            private: privateJsonLd,
-          },
-          { epochsNum: 3 }
-        );
-
-        elizaLogger.info("DKG asset creation request completed successfully");
-        elizaLogger.info("=== Knowledge Asset Created ===");
-        elizaLogger.info(`UAL: ${createAssetResult.UAL}`);
-        elizaLogger.info(
-          `DKG Explorer Link: ${
-            runtime.getSetting("DKG_ENVIRONMENT") === "mainnet"
-              ? "https://dkg.origintrail.io/explore?ual="
-              : "https://dkg-testnet.origintrail.io/explore?ual="
-          }${createAssetResult.UAL}`
-        );
-
-        // Send the first callback for successful publishing
-        callback({
-          text: `Here's your anonymous intent on DKG: ${
-            runtime.getSetting("DKG_ENVIRONMENT") === "mainnet"
-              ? "https://dkg.origintrail.io/explore?ual="
-              : "https://dkg-testnet.origintrail.io/explore?ual="
-            }${createAssetResult.UAL}. Now i am searching my network for your serendipitious connection...`,
+      elizaLogger.info("=== Starting Match Search ===");
+      // Find matches using the new profile data immediately
+      const candidates = await getMatchingProfiles(runtime, newProfileData, platform, username, state);
+      
+      if (!candidates.length) {
+        callback({ 
+          text: "I've updated your profile and I'm searching my network for connections. No matches found yet, but I'll keep looking!" 
         });
-
-        // Add a delay to allow DKG indexing
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-
-        // Get updated profile data after publishing, forcing a cache refresh
-        const updatedProfileData = await getOrFetchUserProfile(DkgClient, platform, username, true);
-        if (!updatedProfileData?.length) {
-          return true; // Already published successfully, so return true even if matching fails
-        }
-
-        const candidates = await getMatchingProfiles(runtime, updatedProfileData[0], platform, username, state);
-        if (!candidates.length) {
-          callback({ text: "No matches found yet. I'll keep searching!" });
-          return true;
-        }
-
-        // Prepare LLM context for generating a social media post
-        const postGenerationState = {
-          ...state,
-          userProfileData: JSON.stringify(updatedProfileData[0], null, 2),
-          matchesData: JSON.stringify(candidates, null, 2)
-        };
-
-        elizaLogger.info("=== State Before Template Merge ===");
-        elizaLogger.info("User Profile Data:", postGenerationState.userProfileData);
-        elizaLogger.info("Matches Data:", postGenerationState.matchesData);
-
-        const context = composeContext({
-          template: MATCH_PROMPT_TEMPLATE,
-          state: postGenerationState
-        });
-
-        elizaLogger.info("=== Final Prompt After Template Merge ===");
-        elizaLogger.info(context);
-
-        // Generate the post text from the candidate profiles
-        const postResult = await generateObjectArray({
-          runtime,
-          context,
-          modelClass: ModelClass.LARGE
-        });
-
-        if (!postResult?.length) {
-          callback({ text: "Found matches but couldn't generate the post. Please try again later!" });
-          return true;
-        }
-
-        // Extract the post text from the result array and send the second callback
-        const postMessage = postResult[0]?.post || "Found matches but couldn't format the message properly. Please try again!";
-        callback({ text: postMessage });
-
         return true;
-      } catch (error) {
-        elizaLogger.error("Error occurred while publishing intents to DKG:", error.message);
-        if (error.stack) {
-          elizaLogger.error("Stack trace:", error.stack);
-        }
-        if (error.response) {
-          elizaLogger.error("Response data:", JSON.stringify(error.response.data, null, 2));
-        }
-        return false;
       }
+
+      // Prepare LLM context for generating a social media post
+      const postGenerationState = {
+        ...state,
+        userProfileData: JSON.stringify(newProfileData, null, 2),
+        matchesData: JSON.stringify(candidates, null, 2)
+      };
+
+      elizaLogger.info("=== State Before Template Merge ===");
+      elizaLogger.info("User Profile Data:", postGenerationState.userProfileData);
+      elizaLogger.info("Matches Data:", postGenerationState.matchesData);
+
+      const matchPromptContext = composeContext({
+        template: MATCH_PROMPT_TEMPLATE,
+        state: postGenerationState
+      });
+
+      elizaLogger.info("=== Final Prompt After Template Merge ===");
+      elizaLogger.info(matchPromptContext);
+
+      // Generate the post text from the candidate profiles
+      const postResult = await generateObjectArray({
+        runtime,
+        context: matchPromptContext,
+        modelClass: ModelClass.LARGE
+      });
+
+      if (!postResult?.length) {
+        callback({ text: "I've updated your profile and found some matches, but couldn't generate the introduction. Please try again!" });
+        return true;
+      }
+
+      // Extract the post text from the result array and send the callback
+      const postMessage = postResult[0]?.post || "Found matches but couldn't format the message properly. Please try again!";
+      callback({ text: postMessage });
+
+      return true;
     } catch (error) {
       elizaLogger.error("Error in publishIntent2Dkg handler:", error);
       return false;

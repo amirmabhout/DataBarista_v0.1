@@ -184,10 +184,7 @@ import {
         }
   
         const rawProfile = profileData[0];
-        if (!rawProfile.allDesiredConnections) {
-          callback({ text: "Your profile seems incomplete. please tell me more about your background and project to see whom best to match with you." });
-          return false;
-        }
+      
   
         if (!state) {
           state = await runtime.composeState(message);
