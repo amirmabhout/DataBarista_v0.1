@@ -199,6 +199,7 @@ export const publishIntent2Dkg: Action = {
       "DKG_BLOCKCHAIN_NAME",
       "DKG_PUBLIC_KEY",
       "DKG_PRIVATE_KEY",
+      "TELEGRAM_INVITE_LINK",
     ];
 
     const missingVars = requiredEnvVars.filter((varName) => !runtime.getSetting(varName));
@@ -305,6 +306,7 @@ export const publishIntent2Dkg: Action = {
 
       if (!result || result.length === 0) {
         elizaLogger.info("No professional intention to publish - empty result");
+        // This is a recurring user, so no need to send the invitation
         callback({
           text: "I found your anonym intent is already published and no update was needed! Let me know if you wanna add any more details but telling me about yourself or who you are looking for.",
         });
@@ -317,6 +319,7 @@ export const publishIntent2Dkg: Action = {
 
       if (analysis.matchType === "exact_match") {
         elizaLogger.info("Exact match found - no updates needed");
+        // This is a recurring user, so no need to send the invitation
         callback({
           text: "I found your anonym intent is already published and no update was needed! Let me know if you wanna add any more details but telling me about yourself or who you are looking for.",
         });
@@ -324,6 +327,8 @@ export const publishIntent2Dkg: Action = {
       }
 
       // If it's an update to an existing intention, use that ID
+      const isFirstTimeUser = analysis.matchType !== "update_existing" && (!userProfileData || userProfileData.length === 0);
+      
       if (analysis.matchType === "update_existing" && analysis.existingIntentionId) {
         state.intentid = analysis.existingIntentionId;
         elizaLogger.info("Updating existing professional intention:", {
@@ -356,11 +361,24 @@ export const publishIntent2Dkg: Action = {
         elizaLogger.error("Async DKG publishing failed:", error);
       });
 
+      // Only send invitation to first-time users
+      if (isFirstTimeUser) {
+        elizaLogger.info("First-time user detected, sending Telegram group invitation");
+        const telegramInviteLink = runtime.getSetting("TELEGRAM_INVITE_LINK");
+        callback({
+          text: `Great, so while I am searching my network for the best match, feel free to join my corner store cafe via this invite to my secret telegram group: @${telegramInviteLink}`
+        });
+      }
+
       elizaLogger.info("=== Starting Match Search ===");
       // Find matches using the new profile data immediately
       const candidates = await getMatchingProfiles(runtime, newProfileData, platform, username, state);
       
       if (!candidates.length) {
+        // Only add delay if we sent the invitation
+        if (isFirstTimeUser) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
         callback({ 
           text: "I've updated your profile and I'm searching my network for connections. No matches found yet, but I'll keep looking!" 
         });
@@ -394,12 +412,20 @@ export const publishIntent2Dkg: Action = {
       });
 
       if (!postResult?.length) {
+        // Only add delay if we sent the invitation
+        if (isFirstTimeUser) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
         callback({ text: "I've updated your profile and found some matches, but couldn't generate the introduction. Please try again!" });
         return true;
       }
 
       // Extract the post text from the result array and send the callback
       const postMessage = postResult[0]?.post || "Found matches but couldn't format the message properly. Please try again!";
+      // Only add delay if we sent the invitation
+      if (isFirstTimeUser) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
       callback({ text: postMessage });
 
       return true;
