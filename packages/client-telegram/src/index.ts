@@ -24,4 +24,19 @@ export const TelegramClientInterface: Client = {
     },
 };
 
+// Add a method to get user chatIds
+export function getUserChatId(runtime: IAgentRuntime, username: string): string | undefined {
+  if (runtime.clients['telegram']?.messageManager?.getUserChatId) {
+    return runtime.clients['telegram'].messageManager.getUserChatId(username);
+  }
+  return undefined;
+}
+
+export function getAllUserChatIds(runtime: IAgentRuntime): Record<string, string> {
+  if (runtime.clients['telegram']?.messageManager?.getAllUserChatIds) {
+    return runtime.clients['telegram'].messageManager.getAllUserChatIds();
+  }
+  return {};
+}
+
 export default TelegramClientInterface;

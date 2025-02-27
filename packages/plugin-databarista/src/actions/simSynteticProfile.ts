@@ -62,8 +62,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Previously helped launch 3 successful fitness apps with over 100k downloads each",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_fittech_alex"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_alex_fittech"
             }
         }
     },
@@ -108,8 +108,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Previously led development at major DEX",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_defi_david"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_david_defi"
             }
         }
     },
@@ -154,8 +154,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Published research on efficient ZK circuits",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_zk_zara"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_zara_zk"
             }
         }
     },
@@ -201,8 +201,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Created several successful NFT collections, active in local artist communities",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_circles_maya"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_maya_artist"
             }
         }
     },
@@ -247,8 +247,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Built successful food cooperative with 200+ members",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_circles_carlos"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_carlos_coop"
             }
         }
     },
@@ -293,8 +293,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Launched successful sustainable fashion brand, seeking Web3 integration",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_circles_sophia"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_sophia_style"
             }
         }
     },
@@ -339,8 +339,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Led successful community education programs, exploring Web3 integration",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_circles_elena"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_elena_edu"
             }
         }
     },
@@ -385,8 +385,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Manages network of urban farms, exploring Web3 integration",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_circles_raj"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_raj_farmer"
             }
         }
     },
@@ -432,8 +432,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Previously built scaling solution handling 1M+ daily transactions",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_l2_leo"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_leo_layer2"
             }
         }
     },
@@ -478,8 +478,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Created identity solution used by 50k+ users",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_did_ian"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_ian_identity"
             }
         }
     },
@@ -524,8 +524,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Led development of major carbon offset protocol",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_refi_rachel"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_rachel_refi"
             }
         }
     },
@@ -570,8 +570,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Built NFT marketplace with 100k+ monthly users",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_nft_nina"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_nina_nft"
             }
         }
     },
@@ -616,8 +616,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Advised 10+ major DAOs on governance",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_dao_tom"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_tom_dao"
             }
         }
     },
@@ -662,8 +662,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Led development of genomics data platform",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_desci_sam"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_sam_science"
             }
         }
     },
@@ -708,8 +708,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Previously worked at major streaming service",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_music_mike"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_mike_music"
             }
         }
     },
@@ -754,8 +754,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Developed crop insurance protocol used by farmers",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_insurance_iris"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_iris_insurance"
             }
         }
     },
@@ -800,8 +800,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Built distributed training system for major AI lab",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_ai_alan"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "biiamorandi"
             }
         }
     },
@@ -846,8 +846,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Built federated social network with 1M+ users",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_social_sally"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_sally_social"
             }
         }
     },
@@ -892,8 +892,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Built distributed storage system handling petabytes",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_storage_steve"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_steve_storage"
             }
         }
     },
@@ -938,7 +938,7 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Led development of popular VR game engine",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
+                "foaf:accountServiceHomepage": "telegram",
                 "foaf:accountName": "test_meta_mark"
             }
         }
@@ -984,8 +984,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Audited major bridge protocols, prevented $10M hack",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_bridge_bob"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_bob_bridge"
             }
         }
     },
@@ -1030,8 +1030,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Implemented tracking system for Fortune 500 company",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_supply_sam"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_sam_supply"
             }
         }
     },
@@ -1076,8 +1076,8 @@ const syntheticProfiles = [
             "datalatte:privateDetails": "Developed EMR system used by 100+ clinics",
             "foaf:account": {
                 "@type": "foaf:OnlineAccount",
-                "foaf:accountServiceHomepage": "twitter",
-                "foaf:accountName": "test_health_helen"
+                "foaf:accountServiceHomepage": "telegram",
+                "foaf:accountName": "test_helen_health"
             }
         }
     }
@@ -1139,7 +1139,7 @@ async function publishSyntheticProfile(
   runtime: IAgentRuntime,
   profile: any,
   profileName: string,
-  platform: string = "twitter",
+  platform: string = "telegram",
   attempt: number = 1
 ): Promise<boolean> {
   try {
@@ -1353,7 +1353,7 @@ export const simSynteticProfile: Action = {
         // Try up to 3 times for each profile
         while (!success && attempts < 3) {
           attempts++;
-          success = await publishSyntheticProfile(runtime, syntheticProfiles[i], `Profile ${i + 1}`, "twitter", attempts);
+          success = await publishSyntheticProfile(runtime, syntheticProfiles[i], `Profile ${i + 1}`, "telegram", attempts);
           
           if (!success && attempts < 3) {
             // Wait for 5 seconds before retrying

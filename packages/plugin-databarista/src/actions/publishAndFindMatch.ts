@@ -180,8 +180,6 @@ async function findMatchingProfilesWithAtlasSearch(
       }
     ];
     
-    elizaLogger.info("=== Vector Search Pipeline ===");
-    elizaLogger.info(JSON.stringify(pipeline, null, 2));
     
     const matches = await collection.aggregate(pipeline).toArray();
     elizaLogger.info(`Found ${matches.length} potential matches using Vector Search`);
@@ -295,12 +293,14 @@ async function storeProfileInCkg(
   platform: string,
   username: string,
   publicJsonLd: any,
-  privateJsonLd: any
+  privateJsonLd: any,
+  chatId?: string
 ): Promise<boolean> {
   try {
     elizaLogger.info("Storing professional intention in MongoDB CKG:", {
       platform,
-      username
+      username,
+      hasChatId: !!chatId
     });
 
     // Prepare current profile data version
@@ -344,15 +344,20 @@ async function storeProfileInCkg(
       // Create a new array with existing versions plus the new one
       const updatedVersions = [...existingVersions, currentProfileData];
       
+      const updateFields: any = { 
+        latestProfile: currentProfileData,
+        profileVersions: updatedVersions,
+        lastUpdated: new Date()
+      };
+
+      // Add chatId if provided
+      if (chatId) {
+        updateFields.telegramChatId = chatId;
+      }
+      
       result = await collection.updateOne(
         { platform, username },
-        { 
-          $set: { 
-            latestProfile: currentProfileData,
-            profileVersions: updatedVersions,
-            lastUpdated: new Date()
-          }
-        }
+        { $set: updateFields }
       );
     } else {
       // Document doesn't exist, create new one with initial version
@@ -361,7 +366,7 @@ async function storeProfileInCkg(
         username
       });
       
-      const profileDocument = {
+      const profileDocument: any = {
         platform,
         username,
         latestProfile: currentProfileData,
@@ -369,6 +374,11 @@ async function storeProfileInCkg(
         created: new Date(),
         lastUpdated: new Date()
       };
+
+      // Add chatId if provided
+      if (chatId) {
+        profileDocument.telegramChatId = chatId;
+      }
       
       result = await collection.insertOne(profileDocument);
     }
@@ -397,7 +407,8 @@ async function storeProfileInCkg(
       updated: result.modifiedCount > 0,
       inserted: result.insertedCount > 0,
       versionCount: (existingDoc?.profileVersions?.length || 0) + 1,
-      hasEmbedding: !!embedding
+      hasEmbedding: !!embedding,
+      hasChatId: !!chatId
     });
     return true;
   } catch (error) {
@@ -530,6 +541,40 @@ async function formatMatchesAsText(
       elizaLogger.info(`Recording the selected match: ${matchData.matchUsername} on ${matchData.matchPlatform}`);
       await mongoProfileProvider.recordMatches(runtime, platform, username, matchToRecord);
       elizaLogger.info(`Recorded the selected match in the user's profile`);
+      
+      // Send notification to the matched user about the connection
+      try {
+        // Create a personalized message for the matched user
+        const matchNotificationMessage = `
+Hello @${matchData.matchUsername}! 
+
+I just connected you with @${username} who was looking for someone with your expertise. They'll probably reach out to you soon.
+
+Here's what I told them about you:
+----------
+${postMessage.replace(`@${username}`, 'They').replace(`@${matchData.matchUsername}`, 'you')}
+----------
+
+Good luck with the connection!
+`;
+        
+        // Send the notification
+        const notificationSent = await mongoProfileProvider.sendNotification(
+          runtime,
+          matchData.matchPlatform,
+          matchData.matchUsername,
+          matchNotificationMessage
+        );
+        
+        if (notificationSent) {
+          elizaLogger.info(`Successfully notified ${matchData.matchUsername} about the match with ${username}`);
+        } else {
+          elizaLogger.warn(`Failed to notify ${matchData.matchUsername} about the match with ${username}`);
+        }
+      } catch (error) {
+        elizaLogger.error(`Error notifying matched user: ${error}`);
+        // Continue even if notification fails
+      }
     } else {
       elizaLogger.warn(`Could not identify specific match from LLM response. Match not recorded.`);
     }
@@ -619,7 +664,7 @@ export const publishAndFindMatch: Action = {
     message: Memory,
     state: State,
     _options: { [key: string]: unknown },
-    callback: HandlerCallback
+    callback: HandlerCallback    
   ): Promise<boolean> => {
     try {
       // Extract username from state or message
@@ -739,8 +784,55 @@ export const publishAndFindMatch: Action = {
       profileCache.set(platform, username, [newProfileData]);
       elizaLogger.info("Cache updated with combined profile data");
 
-      // Store profile in MongoDB CKG
-      const storeResult = await storeProfileInCkg(runtime, platform, username, publicJsonLd, privateJsonLd);
+      // Get chat ID from InterestChats if available
+      let chatId: string | undefined;
+      const telegramClient = runtime.clients['telegram'] as any;
+
+      // Try to get user's chatId directly from the messageManager
+      if (telegramClient?.messageManager?.getUserChatId) {
+        chatId = telegramClient.messageManager.getUserChatId(username);
+        if (chatId) {
+          elizaLogger.info(`Found chat ID ${chatId} for user ${username} using getUserChatId method`);
+        }
+      }
+      
+      // Log all user chatIds
+      if (telegramClient?.messageManager?.getAllUserChatIds) {
+        const allChatIds = telegramClient.messageManager.getAllUserChatIds();
+        if (Object.keys(allChatIds).length > 0) {
+          elizaLogger.info("All stored user chatIds:", JSON.stringify(allChatIds, null, 2));
+        }
+      }
+
+      // Fallback: Check interestChats if we didn't find the chatId
+      if (!chatId && telegramClient?.messageManager?.interestChats) {
+        elizaLogger.info("Interest chats:", JSON.stringify(telegramClient.messageManager.interestChats, null, 2));
+        for (const chatState of Object.values(telegramClient.messageManager.interestChats)) {
+          const userMessage = (chatState as any).messages?.find((msg: any) => msg.userName === username);
+          if (userMessage?.chatId) {
+            chatId = userMessage.chatId;
+            elizaLogger.info(`Found chat ID ${chatId} for user ${username} in InterestChats`);
+            break;
+          }
+        }
+      }
+
+      // If we still don't have a chatId, check if there's one stored in the state
+      if (!chatId && state?.chatId) {
+        chatId = state.chatId as string;
+        elizaLogger.info(`Using chat ID ${chatId} from state object`);
+      }
+
+      // If we get a chatId, store it in the state for future use
+      if (chatId) {
+        state.chatId = chatId;
+        elizaLogger.info(`Storing chat ID ${chatId} in state for future use`);
+      } else {
+        elizaLogger.warn(`Could not find chat ID for user ${username}`);
+      }
+
+      // Store profile in MongoDB CKG with chat ID if available
+      const storeResult = await storeProfileInCkg(runtime, platform, username, publicJsonLd, privateJsonLd, chatId);
       
       if (!storeResult) {
         elizaLogger.error("Failed to store profile in MongoDB CKG");
@@ -800,17 +892,11 @@ export const publishAndFindMatch: Action = {
         matchesData: JSON.stringify(candidates, null, 2)
       };
 
-      elizaLogger.info("=== State Before Template Merge ===");
-      elizaLogger.info("User Profile Data:", postGenerationState.userProfileData);
-      elizaLogger.info("Matches Data:", postGenerationState.matchesData);
-
       const matchPromptContext = composeContext({
         template: MATCH_PROMPT_TEMPLATE,
         state: postGenerationState
       });
 
-      elizaLogger.info("=== Final Prompt After Template Merge ===");
-      elizaLogger.info(matchPromptContext);
 
       // Generate the post text from the candidate profiles
       const postResult = await generateObjectArray({
@@ -843,6 +929,40 @@ export const publishAndFindMatch: Action = {
         elizaLogger.info(`Recording the selected match: ${matchData.matchUsername} on ${matchData.matchPlatform}`);
         await mongoProfileProvider.recordMatches(runtime, platform, username, matchToRecord);
         elizaLogger.info(`Recorded the selected match in the user's profile`);
+        
+        // Send notification to the matched user about the connection
+        try {
+          // Create a personalized message for the matched user
+          const matchNotificationMessage = `
+Hello @${matchData.matchUsername}! 
+
+I just connected you with @${username} who was looking for someone with your expertise. They'll probably reach out to you soon.
+
+Here's what I told them about you:
+----------
+${postMessage.replace(`@${username}`, 'They').replace(`@${matchData.matchUsername}`, 'you')}
+----------
+
+Good luck with the connection!
+`;
+          
+          // Send the notification
+          const notificationSent = await mongoProfileProvider.sendNotification(
+            runtime,
+            matchData.matchPlatform,
+            matchData.matchUsername,
+            matchNotificationMessage
+          );
+          
+          if (notificationSent) {
+            elizaLogger.info(`Successfully notified ${matchData.matchUsername} about the match with ${username}`);
+          } else {
+            elizaLogger.warn(`Failed to notify ${matchData.matchUsername} about the match with ${username}`);
+          }
+        } catch (error) {
+          elizaLogger.error(`Error notifying matched user: ${error}`);
+          // Continue even if notification fails
+        }
       } else {
         elizaLogger.warn(`Could not identify specific match from LLM response. Match not recorded.`);
       }
@@ -852,7 +972,6 @@ export const publishAndFindMatch: Action = {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
       callback({ text: postMessage });
-
       return true;
     } catch (error) {
       elizaLogger.error("Error in publishAndFindMatch handler:", error);

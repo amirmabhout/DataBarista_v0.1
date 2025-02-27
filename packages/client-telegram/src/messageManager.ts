@@ -65,7 +65,7 @@ export type InterestChats = {
     [key: string]: {
         currentHandler: string | undefined;
         lastMessageSent: number;
-        messages: { userId: UUID; userName: string; content: Content }[];
+        messages: { userId: UUID; userName: string; content: Content; chatId?: string }[];
         previousContext?: MessageContext;
         contextSimilarityThreshold?: number;
     };
@@ -76,6 +76,7 @@ export class MessageManager {
     private runtime: IAgentRuntime;
     private interestChats: InterestChats = {};
     private teamMemberUsernames: Map<string, string> = new Map();
+    private userChatIds: Map<string, string> = new Map();
 
     private autoPostConfig: AutoPostConfig;
     private lastChannelActivity: { [channelId: string]: number } = {};
@@ -1063,6 +1064,11 @@ export class MessageManager {
 
         this.lastChannelActivity[ctx.chat.id.toString()] = Date.now();
 
+        // Store the user's chatId when they send a message
+        if (ctx.from.username) {
+            this.setUserChatId(ctx.from.username, ctx.chat.id.toString());
+        }
+
         // Check for pinned message and route to monitor function
         if (
             this.autoPostConfig.enabled &&
@@ -1217,6 +1223,7 @@ export class MessageManager {
                         ctx.from.first_name ||
                         "Unknown User",
                     content: { text: messageText, source: "telegram" },
+                    chatId: ctx.chat.id.toString()
                 });
 
                 if (
@@ -1422,5 +1429,21 @@ export class MessageManager {
             elizaLogger.error("❌ Error handling message:", error);
             elizaLogger.error("Error sending message:", error);
         }
+    }
+
+    // Add a new method to get or save a user's chatId
+    public getUserChatId(username: string): string | undefined {
+        return this.userChatIds.get(username);
+    }
+
+    // Add a method to store a user's chatId
+    public setUserChatId(username: string, chatId: string): void {
+        elizaLogger.info(`Storing chatId ${chatId} for user ${username}`);
+        this.userChatIds.set(username, chatId);
+    }
+
+    // Add a method to get all stored user chatIds
+    public getAllUserChatIds(): Record<string, string> {
+        return Object.fromEntries(this.userChatIds.entries());
     }
 }

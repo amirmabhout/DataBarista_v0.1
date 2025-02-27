@@ -156,9 +156,9 @@ async function generateProfileEmbedding(
 async function findMatchingProfilesWithAtlasSearch(
   runtime: IAgentRuntime,
   idealProfileEmbedding: number[],
-  username: string,
+    username: string,
   platform: string
-): Promise<any[]> {
+  ): Promise<any[]> {
   try {
     elizaLogger.info(`Embedding dimensions: ${idealProfileEmbedding.length}`);
     
@@ -275,7 +275,7 @@ async function findMatchingProfilesWithAtlasSearch(
     elizaLogger.info('MongoDB connection closed after search');
     
     return result;
-  } catch (error) {
+    } catch (error) {
     elizaLogger.error("=== Search Error ===");
     elizaLogger.error("Atlas search failed:", error);
     elizaLogger.error("=====================");
@@ -374,15 +374,15 @@ export const serendipityAction: Action = {
       // Find matches using Atlas Search with the ideal profile embedding
       const candidates = await findMatchingProfilesWithAtlasSearch(runtime, idealMatchEmbedding, username, platform);
       
-      if (!candidates.length) {
-        callback({ text: "No matches found yet. I'll keep searching!" });
-        return true;
-      }
+        if (!candidates.length) {
+          callback({ text: "No matches found yet. I'll keep searching!" });
+          return true;
+        }
       
       // Record the match request to track rate limiting
       await mongoProfileProvider.recordMatchRequest(runtime, platform, username);
-      
-      // Prepare LLM context for generating a social media post
+  
+        // Prepare LLM context for generating a social media post
       // No need to strip embeddings as they are excluded in the MongoDB query
         const postGenerationState = {
         ...activeState,
@@ -431,6 +431,41 @@ export const serendipityAction: Action = {
         elizaLogger.info(`Recording the selected match: ${selectedMatch.matchUsername} on ${selectedMatch.matchPlatform}`);
         await mongoProfileProvider.recordMatches(runtime, platform, username, matchToRecord);
         elizaLogger.info(`Recorded the selected match in the user's profile`);
+        
+        // Send notification to the matched user about the connection
+        try {
+          // Create a personalized message for the matched user
+          const matchNotificationMessage = `
+Hello @${selectedMatch.matchUsername}! 
+
+I just connected you with @${username} who was looking for someone with your expertise. They'll probably reach out to you soon.
+
+Here's what I told them about you:
+----------
+${postMessage.replace(`@${username}`, 'They').replace(`@${selectedMatch.matchUsername}`, 'you')}
+----------
+
+Good luck with the connection!
+`;
+          
+          // Send the notification - pass the callback function
+          const notificationSent = await mongoProfileProvider.sendNotification(
+            runtime,
+            selectedMatch.matchPlatform,
+            selectedMatch.matchUsername,
+            matchNotificationMessage,
+            callback // Pass the callback function for direct messaging
+          );
+          
+          if (notificationSent) {
+            elizaLogger.info(`Successfully notified ${selectedMatch.matchUsername} about the match with ${username}`);
+          } else {
+            elizaLogger.warn(`Failed to notify ${selectedMatch.matchUsername} about the match with ${username}`);
+          }
+        } catch (error) {
+          elizaLogger.error(`Error notifying matched user: ${error}`);
+          // Continue even if notification fails
+        }
       } else {
         elizaLogger.warn(`Could not identify specific match from LLM response. Match not recorded.`);
       }
