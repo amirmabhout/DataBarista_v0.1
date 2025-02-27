@@ -436,13 +436,13 @@ export const serendipityAction: Action = {
         try {
           // Create a personalized message for the matched user
           const matchNotificationMessage = `
-Hello @${selectedMatch.matchUsername}! 
+Hi @${selectedMatch.matchUsername}! 
 
 I just connected you with @${username} who was looking for someone with your expertise. They'll probably reach out to you soon.
 
 Here's what I told them about you:
 ----------
-${postMessage.replace(`@${username}`, 'They').replace(`@${selectedMatch.matchUsername}`, 'you')}
+${postMessage}
 ----------
 
 Good luck with the connection!
@@ -494,10 +494,21 @@ Good luck with the connection!
           text: "Searching for professionals in web3 marketing...",
           action: "SERENDIPITY"
         }
+      },
+      {
+        user: "User",
+        content: { text: "Find me blockchain developers" }
       }],
       [{
         user: "User",
-        content: { text: "Find me blockchain developers" }
+        content: {
+          text: "/new_match"
+        }
+      },
+      {
+        user: "DataBarista",
+        content: { text: "Coming right up!" },
+        action: "SERENDIPITY"
       }]
     ] as ActionExample[][]
   } as Action;

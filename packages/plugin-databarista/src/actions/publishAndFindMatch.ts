@@ -44,12 +44,6 @@ async function generateIdealMatchProfile(
   username: string,
   state?: State
 ): Promise<string> {
-  elizaLogger.info("=== Starting Ideal Match Profile Generation ===");
-  elizaLogger.info("Input Parameters:");
-  elizaLogger.info("User Profile Data:", JSON.stringify(userProfileData, null, 2));
-  elizaLogger.info("Platform:", platform);
-  elizaLogger.info("Username:", username);
-
   // Update state with recent messages if not present
   if (state && !state.recentMessages) {
     state = await runtime.updateRecentMessageState(state);
@@ -79,18 +73,12 @@ async function generateIdealMatchProfile(
     throw new Error("Failed to generate ideal match profile");
   }
 
-  elizaLogger.info("=== Ideal Match Profile Generation Result ===");
-  elizaLogger.info("Raw Result:", JSON.stringify(idealMatchResult, null, 2));
-  elizaLogger.info("================================");
-
   // Extract the ideal match description text
   const idealMatchDescription = idealMatchResult[0].ideal_match_description;
   
   if (!idealMatchDescription) {
     throw new Error("Invalid ideal match description format");
   }
-  
-  elizaLogger.info("Generated ideal match description:", idealMatchDescription.substring(0, 200) + "...");
   
   return idealMatchDescription;
 }
@@ -101,8 +89,6 @@ async function findMatchingProfilesWithAtlasSearch(
   state?: State
 ): Promise<any[]> {
   try {
-    elizaLogger.info(`Embedding dimensions: ${idealProfileEmbedding.length}`);
-    
     const connectionString = runtime.getSetting('MONGODB_CONNECTION_STRING_CKG');
     const dbName = runtime.getSetting('MONGODB_DATABASE_CKG');
     
@@ -121,8 +107,6 @@ async function findMatchingProfilesWithAtlasSearch(
     const platformToExclude = Object.keys(runtime.clients)[0] || 'telegram';
     const usernameToExclude = state?.username || runtime.character?.name || 'databarista';
     
-    elizaLogger.info(`Excluding user's own profile: ${usernameToExclude} on ${platformToExclude}`);
-    
     // Get the user's match history to avoid showing the same profiles again
     const matchHistory = await mongoProfileProvider.getMatchHistory(
       runtime, 
@@ -136,8 +120,6 @@ async function findMatchingProfilesWithAtlasSearch(
       username: match.username
     }));
     
-    elizaLogger.info(`Found ${matchHistory.length} previous matches to exclude`);
-    
     // Add the user's own profile to the exclude list
     excludeList.push({
       platform: platformToExclude as string,
@@ -150,7 +132,7 @@ async function findMatchingProfilesWithAtlasSearch(
         $vectorSearch: {
           index: "vector_index",
           path: "latestProfile.embedding",
-          queryVector: idealProfileEmbedding,  // Pass the entire array directly
+          queryVector: idealProfileEmbedding,
           numCandidates: 100,
           limit: 10 // Increase limit to ensure we have enough candidates after filtering
         }
@@ -180,9 +162,7 @@ async function findMatchingProfilesWithAtlasSearch(
       }
     ];
     
-    
     const matches = await collection.aggregate(pipeline).toArray();
-    elizaLogger.info(`Found ${matches.length} potential matches using Vector Search`);
     
     // Additional safety check to filter out the user's own profile and previously matched profiles
     const filteredMatches = matches.filter(match => {
@@ -197,10 +177,6 @@ async function findMatchingProfilesWithAtlasSearch(
       );
     });
     
-    if (filteredMatches.length < matches.length) {
-      elizaLogger.info(`Filtered out ${matches.length - filteredMatches.length} matches that were excluded`);
-    }
-    
     // Format the results to match the expected structure
     const result = filteredMatches.map(match => ({
       platform: match.platform,
@@ -211,14 +187,10 @@ async function findMatchingProfilesWithAtlasSearch(
     }));
     
     await client.close();
-    elizaLogger.info('MongoDB connection closed after search');
     
     return result;
   } catch (error) {
-    elizaLogger.error("=== Search Error ===");
     elizaLogger.error("Atlas search failed:", error);
-    elizaLogger.error("=====================");
-    // Just return empty results instead of falling back to text search
     return [];
   }
 }
@@ -240,7 +212,6 @@ async function generateProfileEmbedding(
     if (profileData.ideal_match_description) {
       // If we have a direct description text, use it directly
       textToEmbed = profileData.ideal_match_description;
-      elizaLogger.info("Using ideal match description for embedding generation");
     } else {
       // Otherwise, extract from complex profile structure
       const publicData = profileData.public || {};
@@ -267,16 +238,10 @@ async function generateProfileEmbedding(
       return null;
     }
     
-    elizaLogger.info("Generated text for embedding:", textToEmbed.substring(0, 100) + "...");
-    
     // Use ElizaOS Core embedding service
-    elizaLogger.info("Calling embed function to generate embedding");
     const embedding = await embed(runtime, textToEmbed);
     
     if (embedding && embedding.length > 0) {
-      elizaLogger.info(`Generated embedding vector with ${embedding.length} dimensions`);
-      // Log the first few values to help with debugging
-      elizaLogger.debug(`Embedding sample values: [${embedding.slice(0, 5).join(', ')}...]`);
       return embedding;
     } else {
       elizaLogger.warn("Embedding generation returned empty vector");
@@ -297,12 +262,6 @@ async function storeProfileInCkg(
   chatId?: string
 ): Promise<boolean> {
   try {
-    elizaLogger.info("Storing professional intention in MongoDB CKG:", {
-      platform,
-      username,
-      hasChatId: !!chatId
-    });
-
     // Prepare current profile data version
     const currentProfileData: ProfileVersionData = {
         public: publicJsonLd,
@@ -311,13 +270,11 @@ async function storeProfileInCkg(
     };
     
     // Generate embedding for the profile data
-    elizaLogger.info("Generating embedding for profile data");
     const embedding = await generateProfileEmbedding(runtime, currentProfileData);
     
     // Add embedding to profile data if available
     if (embedding) {
       currentProfileData.embedding = embedding;
-      elizaLogger.info(`Added embedding vector with ${embedding.length} dimensions to profile`);
     }
     
     // Store the profile data using MongoDB
@@ -333,10 +290,6 @@ async function storeProfileInCkg(
     if (existingDoc) {
       // Document exists, append new profile version to the profileVersions array
       // and update latestProfile for search purposes
-      elizaLogger.info("Updating existing profile document with new version", {
-        platform,
-        username
-      });
       
       // Get existing profileVersions array or initialize if it doesn't exist
       const existingVersions = existingDoc.profileVersions || [];
@@ -361,10 +314,6 @@ async function storeProfileInCkg(
       );
     } else {
       // Document doesn't exist, create new one with initial version
-      elizaLogger.info("Creating new profile document", {
-        platform,
-        username
-      });
       
       const profileDocument: any = {
         platform,
@@ -403,13 +352,6 @@ async function storeProfileInCkg(
     }
     
     await client.close();
-    elizaLogger.info("Successfully stored profile version in MongoDB CKG", {
-      updated: result.modifiedCount > 0,
-      inserted: result.insertedCount > 0,
-      versionCount: (existingDoc?.profileVersions?.length || 0) + 1,
-      hasEmbedding: !!embedding,
-      hasChatId: !!chatId
-    });
     return true;
   } catch (error) {
     elizaLogger.error("Error storing profile in MongoDB CKG:", error);
@@ -713,19 +655,6 @@ export const publishAndFindMatch: Action = {
         state,
       });
 
-      elizaLogger.info("=== Full KG Extraction Template Prompt ===");
-      elizaLogger.info("Template:", {
-        fullPrompt: context,
-        stateData: {
-          recentMessages: state.recentMessages,
-          uuid: state.uuid,
-          intentid: state.intentid,
-          projectid: state.projectid,
-          platform: state.platform,
-          username: state.username,
-        },
-      });
-
       const result = await generateObjectArray({
         runtime,
         context,
@@ -782,36 +711,22 @@ export const publishAndFindMatch: Action = {
       };
 
       profileCache.set(platform, username, [newProfileData]);
-      elizaLogger.info("Cache updated with combined profile data");
 
-      // Get chat ID from InterestChats if available
+      // Get chat ID for notification purposes
       let chatId: string | undefined;
       const telegramClient = runtime.clients['telegram'] as any;
 
       // Try to get user's chatId directly from the messageManager
       if (telegramClient?.messageManager?.getUserChatId) {
         chatId = telegramClient.messageManager.getUserChatId(username);
-        if (chatId) {
-          elizaLogger.info(`Found chat ID ${chatId} for user ${username} using getUserChatId method`);
-        }
       }
       
-      // Log all user chatIds
-      if (telegramClient?.messageManager?.getAllUserChatIds) {
-        const allChatIds = telegramClient.messageManager.getAllUserChatIds();
-        if (Object.keys(allChatIds).length > 0) {
-          elizaLogger.info("All stored user chatIds:", JSON.stringify(allChatIds, null, 2));
-        }
-      }
-
-      // Fallback: Check interestChats if we didn't find the chatId
+      // If no chatId found, check other sources
       if (!chatId && telegramClient?.messageManager?.interestChats) {
-        elizaLogger.info("Interest chats:", JSON.stringify(telegramClient.messageManager.interestChats, null, 2));
         for (const chatState of Object.values(telegramClient.messageManager.interestChats)) {
           const userMessage = (chatState as any).messages?.find((msg: any) => msg.userName === username);
           if (userMessage?.chatId) {
             chatId = userMessage.chatId;
-            elizaLogger.info(`Found chat ID ${chatId} for user ${username} in InterestChats`);
             break;
           }
         }
@@ -820,15 +735,11 @@ export const publishAndFindMatch: Action = {
       // If we still don't have a chatId, check if there's one stored in the state
       if (!chatId && state?.chatId) {
         chatId = state.chatId as string;
-        elizaLogger.info(`Using chat ID ${chatId} from state object`);
       }
 
-      // If we get a chatId, store it in the state for future use
+      // Store chat ID in state if found
       if (chatId) {
         state.chatId = chatId;
-        elizaLogger.info(`Storing chat ID ${chatId} in state for future use`);
-      } else {
-        elizaLogger.warn(`Could not find chat ID for user ${username}`);
       }
 
       // Store profile in MongoDB CKG with chat ID if available

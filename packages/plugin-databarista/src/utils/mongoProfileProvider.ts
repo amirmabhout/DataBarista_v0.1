@@ -611,37 +611,25 @@ class MongoProfileProvider {
       if (platform === 'telegram') {
         const storedChatId = await this.getTelegramChatId(runtime, username);
         if (storedChatId) {
-          elizaLogger.info(`Found chat ID ${storedChatId} for user ${username} in CKG database`);
           try {
             const telegramClient = runtime.clients['telegram'] as TelegramClient;
             await telegramClient.bot.telegram.sendMessage(storedChatId, message);
-            elizaLogger.info(`Successfully sent message to ${username} using chat ID from CKG database`);
             return true;
           } catch (error) {
-            elizaLogger.error(`Failed to send message using chat ID from CKG database: ${error}`);
+            elizaLogger.error(`Failed to send Telegram message to ${username}: ${error}`);
             return false;
           }
         } else {
-          elizaLogger.warn(`No chat ID found in CKG database for user ${username}`);
+          elizaLogger.warn(`No chat ID found for user ${username}`);
           return false;
         }
       }
 
-      // For non-Telegram platforms, use the callback if provided
-      if (userCallback && typeof userCallback === 'function') {
-        try {
-          await userCallback({ text: message, source: platform });
-          return true;
-        } catch (error) {
-          elizaLogger.error(`Failed to send message using callback: ${error}`);
-          return false;
-        }
-      }
+     
 
-      elizaLogger.warn(`No method available to send message to ${username} on platform ${platform}`);
       return false;
     } catch (error) {
-      elizaLogger.error('Error in sendNotification:', error);
+      elizaLogger.error(`Error in sendNotification: ${error}`);
       return false;
     }
   }
