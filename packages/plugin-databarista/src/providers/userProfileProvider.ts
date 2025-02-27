@@ -4,6 +4,8 @@ import DKG from "dkg.js";
 import { USER_PROFILE_QUERY } from "../utils/sparqlQueries";
 import { DkgClientConfig } from "../utils/types";
 import { profileCache } from "../utils/profileCache";
+import { mongoProfileProvider } from "../utils/mongoProfileProvider";
+import { stripEmbeddings } from "../utils/profileUtils";
 
 let DkgClient: any = null;
 
@@ -40,49 +42,21 @@ const userProfileProvider: Provider = {
             const clients = runtime.clients;
             let platform = Object.keys(clients)[0];
 
-            elizaLogger.info("Checking for cached user data:", {
+            elizaLogger.info("Checking for user profile data:", {
                 username,
                 platform
             });
 
-            // Try to get data from cache first
-            let userData = profileCache.get(platform, username);
-
-            // If not in cache, query DKG
-            if (userData === null) { // explicitly check for null since empty array is valid
-                elizaLogger.info("No cached data found, querying DKG:", {
-                    username,
-                    platform
-                });
-
-                // Query for user data
-                const userDataQuery = USER_PROFILE_QUERY
-                    .replace("{{platform}}", platform)
-                    .replace("{{username}}", username);
-
-                try {
-                    const queryResult = await DkgClient.graph.query(userDataQuery, "SELECT");
-                    elizaLogger.info("User data query result:", {
-                        status: queryResult.status,
-                        data: queryResult.data
-                    });
-                    
-                    userData = queryResult.data;
-
-                    // Always cache the result, even if empty
-                    profileCache.set(platform, username, userData);
-                } catch (error) {
-                    elizaLogger.error("Error querying user data:", error);
-                    // Cache empty result on error to prevent repeated failed queries
-                    profileCache.set(platform, username, []);
-                    return null;
-                }
-            }
+            // Get profile from MongoDB
+            let userData = await mongoProfileProvider.getProfile(runtime, platform, username);
 
             // If no data found
             if (!userData || userData.length === 0) {
-                return `No profile information found yet for @${username} on ${platform}. Converse the user to get more information to build a better profile.`;
+                return `No profile information found yet for @${username} on ${platform}. Converse with the user to get more information to build a better profile.`;
             }
+
+            // Strip embeddings from the profile data before formatting as JSON-LD
+            userData = stripEmbeddings(userData);
 
             // Format the found data as JSON-LD
             const jsonLd = {
@@ -91,15 +65,18 @@ const userProfileProvider: Provider = {
                     "datalatte": "https://datalatte.com/ns/",
                     "foaf": "http://xmlns.com/foaf/0.1/"
                 },
-                "@graph": userData
+                "@graph": userData.map(item => ({
+                    ...item.latestProfile.public,
+                    ...item.latestProfile.private
+                }))
             };
 
             return `
-Profile history for @${username} collected through ${platform} interactions with DataBarista sofar:
+Profile history for @${username} collected through ${platform} interactions with DataBarista so far:
 \`\`\`json
 ${JSON.stringify(jsonLd, null, 2)}
 \`\`\`
-Task: Based on users recent conversation, engage in a natural conversation to ask follow up questions to get information that helps finding a better match for the intent user is looking for currently in the conversation.
+Task: Based on user's recent conversation, engage in a natural conversation to ask follow-up questions to get information that helps finding a better match for the intent user is looking for currently in the conversation.
 `;
         } catch (error) {
             elizaLogger.error("Error in userProfileProvider:", error);

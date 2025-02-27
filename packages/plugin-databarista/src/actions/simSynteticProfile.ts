@@ -6,13 +6,18 @@ import {
   HandlerCallback,
   ActionExample,
   type Action,
+  embed
 } from "@elizaos/core";
-// @ts-ignore
-import DKG from "dkg.js";
-import { DkgClientConfig } from "../utils/types";
+import { MongoClient } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 
-let DkgClient: any = null;
+// Define interface for profile version data
+interface ProfileVersionData {
+  public: any;
+  private: any;
+  timestamp: Date;
+  embedding?: number[];
+}
 
 // Define synthetic profiles directly in this file
 const syntheticProfiles = [
@@ -1078,20 +1083,76 @@ const syntheticProfiles = [
     }
 ];
 
+/**
+ * Generate embeddings for profile data using ElizaOS Core's embedding service
+ * @param runtime Agent runtime for embedding service 
+ * @param profileData Profile data to generate embeddings for
+ * @returns Embedding vector as number array
+ */
+async function generateProfileEmbedding(
+  runtime: IAgentRuntime,
+  profileData: any
+): Promise<number[] | null> {
+  try {
+    // Extract key fields from profile data to create a text representation
+    const publicData = profileData.public || {};
+    const privateData = profileData.private || {};
+    
+    // Combine the most important semantic fields for embedding
+    const textToEmbed = [
+      publicData["datalatte:summary"] || "",
+      publicData["datalatte:intentCategory"] || "",
+      publicData["datalatte:projectDescription"] || "",
+      privateData["datalatte:background"] || "",
+      privateData["datalatte:knowledgeDomain"] || "",
+      privateData?.["datalatte:hasProject"]?.["datalatte:projectDomain"] || "",
+      privateData?.["datalatte:hasProject"]?.["schema:description"] || "",
+      // Join desired connections if it's an array
+      Array.isArray(publicData["datalatte:desiredConnections"]) 
+        ? publicData["datalatte:desiredConnections"].join(" ") 
+        : (publicData["datalatte:desiredConnections"] || "")
+    ].filter(Boolean).join(" ");
+    
+    if (!textToEmbed.trim()) {
+      elizaLogger.warn("No meaningful text found to embed for profile");
+      return null;
+    }
+    
+    elizaLogger.info("Generated text for embedding:", textToEmbed.substring(0, 100) + "...");
+    
+    // Use ElizaOS Core embedding service
+    const embedding = await embed(runtime, textToEmbed);
+    if (embedding.length > 0) {
+      elizaLogger.info(`Generated embedding vector with ${embedding.length} dimensions`);
+      return embedding;
+    } else {
+      elizaLogger.warn("Embedding generation returned empty vector");
+      return null;
+    }
+  } catch (error) {
+    elizaLogger.error("Error generating profile embedding:", error);
+    return null;
+  }
+}
+
 async function publishSyntheticProfile(
+  runtime: IAgentRuntime,
   profile: any,
   profileName: string,
-  DkgClient: any,
+  platform: string = "twitter",
   attempt: number = 1
 ): Promise<boolean> {
   try {
-    elizaLogger.info(`Publishing ${profileName} to DKG (Attempt ${attempt}/3)...`);
+    elizaLogger.info(`Publishing ${profileName} to MongoDB CKG (Attempt ${attempt}/3)...`);
     
     // Generate IDs that will be used across both public and private parts
     const personId = `urn:uuid:${uuidv4()}`;
     const intentId = `urn:intent:int_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const projectId = `urn:project:int_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const timestamp = new Date().toISOString();
+    const username = profile.private.foaf?.account?.foaf?.accountName || 
+                     profile.private?.["foaf:account"]?.["foaf:accountName"] || 
+                     `synthetic_user_${Math.random().toString(36).substr(2, 9)}`;
 
     // Construct public part
     const publicData = {
@@ -1129,8 +1190,8 @@ async function publishSyntheticProfile(
       "datalatte:privateDetails": profile.private["datalatte:privateDetails"],
       "datalatte:hasAccount": {
         "@type": "datalatte:Account",
-        "datalatte:accountPlatform": "twitter",
-        "datalatte:accountUsername": profile.private["foaf:account"]["foaf:accountName"]
+        "datalatte:accountPlatform": platform,
+        "datalatte:accountUsername": username
       },
       "datalatte:hasIntent": {
         "@type": "datalatte:Intent",
@@ -1142,22 +1203,100 @@ async function publishSyntheticProfile(
       }
     };
 
-    elizaLogger.info("Publishing public data:", publicData);
-    elizaLogger.info("Publishing private data:", privateData);
+    elizaLogger.info("Publishing profile data for:", { platform, username });
 
-    const createAssetResult = await DkgClient.asset.create(
-      {
+    // Prepare current profile data version
+    const currentProfileData: ProfileVersionData = {
         public: publicData,
         private: privateData,
-      },
-      { epochsNum: 3 }
-    );
-
-    elizaLogger.info(`=== ${profileName} Knowledge Asset Created ===`);
-    elizaLogger.info(`UAL: ${createAssetResult.UAL}`);
-    elizaLogger.info(`DKG Explorer Link: ${process.env.DKG_ENVIRONMENT === 'mainnet' ?
-      'https://dkg.origintrail.io/explore?ual=' :
-      'https://dkg-testnet.origintrail.io/explore?ual='}${createAssetResult.UAL}`);
+      timestamp: new Date()
+    };
+    
+    // Generate embedding for the profile data
+    elizaLogger.info("Generating embedding for profile data");
+    const embedding = await generateProfileEmbedding(runtime, currentProfileData);
+    
+    // Add embedding to profile data if available
+    if (embedding) {
+      currentProfileData.embedding = embedding;
+      elizaLogger.info(`Added embedding vector with ${embedding.length} dimensions to profile`);
+    }
+    
+    // Store the profile data using MongoDB
+    const connectionString = runtime.getSetting('MONGODB_CONNECTION_STRING_CKG');
+    const dbName = runtime.getSetting('MONGODB_DATABASE_CKG');
+    
+    if (!connectionString) {
+      throw new Error('MONGODB_CONNECTION_STRING_CKG not set in environment');
+    }
+    
+    if (!dbName) {
+      throw new Error('MONGODB_DATABASE_CKG not set in environment');
+    }
+    
+    const client = await new MongoClient(connectionString).connect();
+    const db = client.db(dbName);
+    const collection = db.collection('profiles');
+    
+    // Find existing document for this user
+    const existingDoc = await collection.findOne({ platform, username });
+    
+    let result;
+    
+    if (existingDoc) {
+      // Document exists, append new profile version to the profileVersions array
+      // and update latestProfile for search purposes
+      elizaLogger.info("Updating existing profile document with new version", {
+        platform,
+        username
+      });
+      
+      // Get existing profileVersions array or initialize if it doesn't exist
+      const existingVersions = existingDoc.profileVersions || [];
+      
+      // Create a new array with existing versions plus the new one
+      const updatedVersions = [...existingVersions, currentProfileData];
+      
+      result = await collection.updateOne(
+        { platform, username },
+        { 
+          $set: { 
+            latestProfile: currentProfileData,
+            profileVersions: updatedVersions,
+            lastUpdated: new Date()
+          }
+        }
+      );
+    } else {
+      // Document doesn't exist, create new one with initial version
+      elizaLogger.info("Creating new profile document", {
+        platform,
+        username
+      });
+      
+      const profileDocument = {
+        platform,
+        username,
+        latestProfile: currentProfileData,
+        profileVersions: [currentProfileData],
+        created: new Date(),
+        lastUpdated: new Date()
+      };
+      
+      result = await collection.insertOne(profileDocument);
+    }
+    
+    await client.close();
+    
+    elizaLogger.info(`=== ${profileName} Successfully Stored in MongoDB CKG ===`);
+    elizaLogger.info({
+      updated: result.modifiedCount > 0,
+      inserted: result.insertedCount > 0,
+      versionCount: (existingDoc?.profileVersions?.length || 0) + 1,
+      hasEmbedding: !!embedding,
+      platform,
+      username
+    });
     elizaLogger.info("==========================================");
     
     return true;
@@ -1173,16 +1312,12 @@ async function publishSyntheticProfile(
 export const simSynteticProfile: Action = {
   name: "SIM_SYNTHETIC_PROFILE",
   similes: ["SIMULATE_SYNTHETIC_PROFILE", "PUBLISH_SYNTHETIC_PROFILES", "LOAD_SYNTHETIC_DATA"],
-  description: "Publishes synthetic profiles to DKG for testing and development purposes.",
+  description: "Publishes synthetic profiles to MongoDB CKG for testing and development purposes.",
 
   validate: async (runtime: IAgentRuntime, _message: Memory) => {
     const requiredEnvVars = [
-      "DKG_ENVIRONMENT",
-      "DKG_HOSTNAME",
-      "DKG_PORT",
-      "DKG_BLOCKCHAIN_NAME",
-      "DKG_PUBLIC_KEY",
-      "DKG_PRIVATE_KEY",
+      "MONGODB_CONNECTION_STRING_CKG",
+      "MONGODB_DATABASE_CKG",
     ];
 
     const missingVars = requiredEnvVars.filter((varName) => !runtime.getSetting(varName));
@@ -1203,40 +1338,22 @@ export const simSynteticProfile: Action = {
     callback: HandlerCallback
   ): Promise<boolean> => {
     try {
-      // Initialize DKG client if needed
-      if (!DkgClient) {
-        const config: DkgClientConfig = {
-          environment: runtime.getSetting("DKG_ENVIRONMENT"),
-          endpoint: runtime.getSetting("DKG_HOSTNAME"),
-          port: runtime.getSetting("DKG_PORT"),
-          blockchain: {
-            name: runtime.getSetting("DKG_BLOCKCHAIN_NAME"),
-            publicKey: runtime.getSetting("DKG_PUBLIC_KEY"),
-            privateKey: runtime.getSetting("DKG_PRIVATE_KEY"),
-          },
-          maxNumberOfRetries: 300,
-          frequency: 2,
-          contentType: "all",
-          nodeApiVersion: "/v1",
-        };
-        DkgClient = new DKG(config);
-      }
-
       callback({
-        text: "Starting to publish synthetic profiles to DKG...",
+        text: "Starting to publish synthetic profiles to MongoDB CKG...",
       });
 
       let successCount = 0;
       let failureCount = 0;
 
-      for (let i = 3; i < syntheticProfiles.length; i++) {
+      // Process a subset of synthetic profiles (starting from index 3)
+      for (let i = 0; i < syntheticProfiles.length; i++) {
         let success = false;
         let attempts = 0;
         
         // Try up to 3 times for each profile
         while (!success && attempts < 3) {
           attempts++;
-          success = await publishSyntheticProfile(syntheticProfiles[i], `Profile ${i + 1}`, DkgClient, attempts);
+          success = await publishSyntheticProfile(runtime, syntheticProfiles[i], `Profile ${i + 1}`, "twitter", attempts);
           
           if (!success && attempts < 3) {
             // Wait for 5 seconds before retrying
@@ -1259,7 +1376,7 @@ export const simSynteticProfile: Action = {
       }
 
       callback({
-        text: `Finished publishing synthetic profiles. Successfully published ${successCount} profiles, failed to publish ${failureCount} profiles.`,
+        text: `Finished publishing synthetic profiles to MongoDB CKG. Successfully published ${successCount} profiles, failed to publish ${failureCount} profiles.`,
       });
 
       return true;
@@ -1267,7 +1384,7 @@ export const simSynteticProfile: Action = {
     } catch (error) {
       elizaLogger.error("Error in simSynteticProfile handler:", error);
       callback({
-        text: "An error occurred while publishing synthetic profiles.",
+        text: "An error occurred while publishing synthetic profiles to MongoDB CKG.",
       });
       return false;
     }
@@ -1278,7 +1395,7 @@ export const simSynteticProfile: Action = {
       {
         user: "DataBarista",
         content: {
-          "text": "I'll help you publish synthetic profiles to DKG for testing.",
+          "text": "I'll help you publish synthetic profiles to the database for testing.",
           "action": "(SIM_SYNTHETIC_PROFILE)"
         },
       }

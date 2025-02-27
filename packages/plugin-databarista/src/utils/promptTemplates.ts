@@ -16,6 +16,8 @@ Potential Match Data:
 
 Task:
 From the above data, choose the best match that aligns with the user's interests.
+IMPORTANT: Never select the user's own profile as a match. If the user's profile appears in the potential matches, ignore it and select a different match.
+
 Generate a friendly social media post that introduces the user and the best match together.
 The post should:
 1. Use the proper @username for both user and the best match chosen
@@ -26,8 +28,12 @@ Return an array containing a single object with the following structure:
 
 Example Output:
 [{
-  "post": "DataBarista here, serving you a double shot of innovation ☕️ @amirmabhout, meet @test_fitnessguy! @amirmabhout is designing a cutting-edge AI fitness coach, while @test_fitnessguy has a solid track record marketing innovative fitness products to a tech-enthused crowd. Together, your blend of smart design and strategic promotion has the potential to revolutionize how people engage with fitness technology. Let's see what groundbreaking ideas you can brew up!"
+  "post": "DataBarista here, serving you a double shot of innovation ☕️ @amirmabhout, meet @test_fitnessguy! @amirmabhout is designing a cutting-edge AI fitness coach, while @test_fitnessguy has a solid track record marketing innovative fitness products to a tech-enthused crowd. Together, your blend of smart design and strategic promotion has the potential to revolutionize how people engage with fitness technology. Let's see what groundbreaking ideas you can brew up!",
+  "matchUsername": "test_fitnessguy",
+  "matchPlatform": "telegram"
 }]
+
+IMPORTANT: You must include the exact matchUsername and matchPlatform fields with the values from the chosen match so the system knows which match was selected.
 
 Do not include any additional text or explanation outside of the array structure.
 `;
@@ -51,10 +57,11 @@ Recent Messages:
 Task:
 Generate a SPARQL query that finds potential matching profiles in the Decentralized Knowledge Graph (DKG) based on both the user profile and recent messages. The query must:
 
-1. **Exclude the User's Own Profile:**  
-   Filter out any ?person that has a datalatte:hasAccount with both:  
+1. **IMPORTANT: Exclude the User's OWN Profile:**  
+   You MUST filter out any ?person that has a datalatte:hasAccount with both:  
    - datalatte:accountPlatform equal to "{{platform}}" (e.g. "telegram")  
    - datalatte:accountUsername that matches "{{username}}" (case-insensitive)
+   This is critical to prevent the user from being matched with themselves.
 
 2. **Restrict to Same Account Platform:**  
    Only consider profiles where their datalatte:hasAccount has datalatte:accountPlatform equal to "{{platform}}".
@@ -91,6 +98,43 @@ Construct the FILTER clause so that it checks if any candidate field (after appl
 [{
   "query": "PREFIX schema: <http://schema.org/> PREFIX datalatte: <https://datalatte.com/ns/> PREFIX foaf: <http://xmlns.com/foaf/0.1/> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> SELECT DISTINCT ?person ?accountUsername ?knowledgeDomain ?background ?allDesiredConnections ?projectDomain ?projectType ?challenge ?intentTimestamp ?projectName ?projectDescription WHERE { { SELECT ?person (MAX(?ts) AS ?intentTimestamp) { ?person datalatte:hasIntent/datalatte:revisionTimestamp ?ts . } GROUP BY ?person } ?person a foaf:Person ; datalatte:hasAccount ?account . ?account datalatte:accountUsername ?accountUsername ; datalatte:accountPlatform ?accountPlatform . FILTER( LCASE(STR(?accountPlatform)) = LCASE(\"{{platform}}\") ) OPTIONAL { ?person datalatte:knowledgeDomain ?knowledgeDomain. } OPTIONAL { ?person datalatte:background ?background. } OPTIONAL { ?person datalatte:hasIntent ?intent. OPTIONAL { ?intent datalatte:desiredConnections ?allDesiredConnections ; datalatte:challenge ?challenge ; datalatte:relatedTo ?project . OPTIONAL { ?project datalatte:type ?projectType. } OPTIONAL { ?project datalatte:projectDomain ?projectDomain. } OPTIONAL { ?project foaf:name ?projectName. } OPTIONAL { ?project schema:description ?projectDescription. } } } FILTER NOT EXISTS { ?person datalatte:hasAccount ?userAccount . ?userAccount datalatte:accountPlatform \"{{platform}}\" ; datalatte:accountUsername ?userName . FILTER( LCASE(STR(?userName)) = LCASE(\"{{username}}\") ) } FILTER ( regex(LCASE(COALESCE(STR(?knowledgeDomain), \"\")), \"{{kKeyword1}}|{{kKeyword2}}|{{kKeyword3}}\") || regex(LCASE(COALESCE(STR(?background), \"\")), \"{{bKeyword1}}|{{bKeyword2}}|{{bKeyword3}}\") || regex(LCASE(COALESCE(STR(?allDesiredConnections), \"\")), \"{{dKeyword1}}|{{dKeyword2}}|{{dKeyword3}}\") || regex(LCASE(COALESCE(STR(?projectDomain), \"\")), \"{{pKeyword1}}|{{pKeyword2}}|{{pKeyword3}}\") ) } ORDER BY DESC(?intentTimestamp) LIMIT 15"
 }]
+`;
+
+/**
+ * Template for generating ideal match profiles for vector search
+ */
+export const IDEAL_MATCH_TEMPLATE = `
+You are an AI matchmaker assistant specialized in understanding user intents and generating an optimized description of their ideal match.
+
+User Profile:
+{{userProfileData}}
+
+Task:
+Based on the user's profile and intent data, generate a detailed text description of the IDEAL match for this user. This description will be used directly for vector similarity search to find matching profiles.
+
+Focus on describing someone who would:
+1. Have knowledge domains that complement the user's needs
+2. Possess skills and experience relevant to the user's goals
+3. Work in project domains aligned with what the user is looking for
+4. Exhibit any specific traits mentioned by the user as desirable qualities
+
+Create a coherent, detailed paragraph (250-500 words) that thoroughly describes this ideal match. Include specific details about their:
+- Professional background and expertise
+- Skills and capabilities
+- Knowledge domains and specializations
+- Project types and experience
+- Desired connections of the ideal match to match user profile
+
+The text should be rich in relevant keywords that would help in semantic matching but remain natural-sounding.
+
+Return an array containing a single object with the following structure:
+
+Example Output:
+[{
+  "ideal_match_description": "The ideal match for this user would be a marketing professional with 5+ years of experience specializing in AI product promotion and community growth strategies. They should have deep expertise in digital marketing, growth hacking, and social media campaign management specifically for technology startups. Ideally, they would understand the AI agent ecosystem and have experience helping AI-based products reach their target audiences through effective go-to-market strategies. They should be familiar with both B2B and B2C marketing approaches for cutting-edge technology, and possess strong analytical skills to measure campaign effectiveness. The ideal match would have experience in building engaged communities around technical products and understand how to communicate complex technical concepts to different audiences. They would be passionate about emerging technologies and have connections to media outlets, technology influencers, and potential partners or investors in the AI space. They should be creative, strategic, and able to work in fast-paced startup environments while providing structured marketing guidance. Knowledge of Web3 would be beneficial but not required. This person should be collaborative, proactive in suggesting ideas, and genuinely interested in helping innovative AI products succeed in the market."
+}]
+
+Do not include any additional text or explanation outside of the array structure.
 `;
 
 /**

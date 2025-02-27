@@ -21,12 +21,16 @@
     "dependencies": {
         "@elizaos/core": "workspace:*",
         "dkg.js": "8.0.4",
-        "tsup": "8.3.5"
+        "tsup": "8.3.5",
+        "uuid": "^9.0.1"
     },
     "scripts": {
         "build": "tsup --format esm --dts",
         "dev": "tsup --format esm --dts --watch",
-        "test": "vitest run"
+        "test": "vitest run",
+        "populate-ckg": "node scripts/populate-ckg.js",
+        "create-vector-index": "node scripts/create-vector-index.js",
+        "populate-ckg-with-embeddings": "tsx src/utils/populateCkgTestData.ts"
     },
     "peerDependencies": {
         "whatwg-url": "7.1.0",
