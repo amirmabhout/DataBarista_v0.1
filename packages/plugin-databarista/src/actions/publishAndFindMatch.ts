@@ -262,6 +262,10 @@ async function storeProfileInCkg(
   chatId?: string
 ): Promise<boolean> {
   try {
+    // Get agent details from runtime
+    const agentId = runtime.agentId;
+    const agentUsername = runtime.character?.username || runtime.character?.name;
+    
     // Prepare current profile data version
     const currentProfileData: ProfileVersionData = {
         public: publicJsonLd,
@@ -300,7 +304,9 @@ async function storeProfileInCkg(
       const updateFields: any = { 
         latestProfile: currentProfileData,
         profileVersions: updatedVersions,
-        lastUpdated: new Date()
+        lastUpdated: new Date(),
+        agentId, // Add agent ID
+        agentUsername // Add agent username
       };
 
       // Add chatId if provided
@@ -321,7 +327,9 @@ async function storeProfileInCkg(
         latestProfile: currentProfileData,
         profileVersions: [currentProfileData],
         created: new Date(),
-        lastUpdated: new Date()
+        lastUpdated: new Date(),
+        agentId, // Add agent ID
+        agentUsername // Add agent username
       };
 
       // Add chatId if provided
