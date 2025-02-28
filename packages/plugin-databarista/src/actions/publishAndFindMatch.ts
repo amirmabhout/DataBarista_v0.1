@@ -1,5 +1,4 @@
 import {
-  IAgentRuntime,
   Memory,
   State,
   elizaLogger,
@@ -11,11 +10,13 @@ import {
   generateObjectArray,
   embed
 } from "@elizaos/core";
+import type { IAgentRuntime } from "@elizaos/core";
 import { MongoClient } from 'mongodb';
 import { MATCH_PROMPT_TEMPLATE, KG_EXTRACTION_TEMPLATE, IDEAL_MATCH_TEMPLATE } from "../utils/promptTemplates";
 import { SHACL_SHAPES } from "../utils/shaclShapes";
 import { profileCache } from "../utils/profileCache";
 import { mongoProfileProvider } from "../utils/mongoProfileProvider";
+import { getRandomMatchImage } from "../utils/imageUtils";
 import { v4 as uuidv4 } from "uuid";
 
 // Define interface for profile version data
@@ -491,11 +492,36 @@ async function formatMatchesAsText(
       elizaLogger.info(`Recording the selected match: ${matchData.matchUsername} on ${matchData.matchPlatform}`);
       await mongoProfileProvider.recordMatches(runtime, platform, username, matchToRecord);
       elizaLogger.info(`Recorded the selected match in the user's profile`);
+
+      // Use hardcoded image path instead of getRandomMatchImage()
+      const matchImagePath = '/home/amir/DataBarista_v0.1/packages/plugin-databarista/src/assets/imagematch-01.jpg';
+      elizaLogger.info(`Using hardcoded match image`);
+      elizaLogger.info(`Recorded the selected match in the user's profile`);
       
-      // Send notification to the matched user about the connection
-      try {
-        // Create a personalized message for the matched user
-        const matchNotificationMessage = `
+      // Only attempt to send the image if a valid path was returned
+      if (matchImagePath) {
+        try {
+          // Get user's chat ID to send the image
+          const userChatId = await getUserChatId(runtime, platform, username);
+          
+          // Send the match image to the requesting user
+          if (userChatId) {
+            elizaLogger.info(`Sending match image to user ${username} (chat ID: ${userChatId})`);
+            await mongoProfileProvider.sendTelegramImage(
+              runtime,
+              username,
+              matchImagePath,
+              "Use this image to identify each other when meeting in person."
+            );
+            elizaLogger.info(`Successfully sent image to user ${username}`);
+          } else {
+            elizaLogger.warn(`Cannot send match image to user ${username} - no chat ID found`);
+          }
+          
+          // Send notification to the matched user about the connection
+          try {
+            // Create a personalized message for the matched user
+            const matchNotificationMessage = `
 Hello @${matchData.matchUsername}! 
 
 I just connected you with @${username} who was looking for someone with your expertise. They'll probably reach out to you soon.
@@ -507,23 +533,38 @@ ${postMessage.replace(`@${username}`, 'They').replace(`@${matchData.matchUsernam
 
 Good luck with the connection!
 `;
-        
-        // Send the notification
-        const notificationSent = await mongoProfileProvider.sendNotification(
-          runtime,
-          matchData.matchPlatform,
-          matchData.matchUsername,
-          matchNotificationMessage
-        );
-        
-        if (notificationSent) {
-          elizaLogger.info(`Successfully notified ${matchData.matchUsername} about the match with ${username}`);
-        } else {
-          elizaLogger.warn(`Failed to notify ${matchData.matchUsername} about the match with ${username}`);
+            
+            // Send the notification
+            const notificationSent = await mongoProfileProvider.sendNotification(
+              runtime,
+              matchData.matchPlatform,
+              matchData.matchUsername,
+              matchNotificationMessage
+            );
+            
+            if (notificationSent) {
+              elizaLogger.info(`Successfully notified ${matchData.matchUsername} about the match with ${username}`);
+              
+              // Also send the match image to the matched user
+              elizaLogger.info(`Sending match image to matched user ${matchData.matchUsername} using direct Telegram API`);
+              await mongoProfileProvider.sendTelegramImage(
+                runtime,
+                matchData.matchUsername,
+                matchImagePath,
+                "Use this image to identify each other when meeting in person."
+              );
+              elizaLogger.info(`Successfully sent match image to matched user ${matchData.matchUsername}`);
+            } else {
+              elizaLogger.warn(`Failed to notify ${matchData.matchUsername} about the match with ${username}`);
+            }
+          } catch (error) {
+            elizaLogger.error(`Error notifying matched user: ${error}`);
+            // Continue even if notification fails
+          }
+        } catch (error) {
+          elizaLogger.error(`Error sending match image: ${error}`);
+          // Continue even if image sending fails
         }
-      } catch (error) {
-        elizaLogger.error(`Error notifying matched user: ${error}`);
-        // Continue even if notification fails
       }
     } else {
       elizaLogger.warn(`Could not identify specific match from LLM response. Match not recorded.`);
@@ -534,6 +575,54 @@ Good luck with the connection!
     elizaLogger.error("Error formatting matches:", error);
     return "I found some matches for you, but encountered an error while formatting the results.";
   }
+}
+
+/**
+ * Helper function to get a user's Telegram chat ID
+ */
+async function getUserChatId(
+  runtime: IAgentRuntime,
+  platform: string,
+  username: string
+): Promise<string | undefined> {
+  let chatId: string | undefined;
+  
+  // Try to get from the messageManager first
+  const telegramClient = runtime.clients['telegram'] as any;
+  if (telegramClient?.messageManager?.getUserChatId) {
+    chatId = telegramClient.messageManager.getUserChatId(username);
+    if (chatId) {
+      return chatId;
+    }
+  }
+  
+  // Check if there's one stored in MongoDB
+  try {
+    // Direct database access to get the chat ID
+    const connectionString = runtime.getSetting('MONGODB_CONNECTION_STRING_CKG');
+    const dbName = runtime.getSetting('MONGODB_DATABASE_CKG');
+    
+    if (connectionString && dbName) {
+      const client = new MongoClient(connectionString);
+      await client.connect();
+      
+      const db = client.db(dbName);
+      const collection = db.collection('profiles');
+      
+      // Find the profile document
+      const profileDoc = await collection.findOne({ platform, username });
+      
+      await client.close();
+      
+      if (profileDoc && profileDoc.telegramChatId) {
+        return profileDoc.telegramChatId;
+      }
+    }
+  } catch (error) {
+    elizaLogger.error(`Error getting chat ID from MongoDB: ${error}`);
+  }
+  
+  return undefined;
 }
 
 // Process the matchmaking request
@@ -582,6 +671,42 @@ export async function processMatchmaking(
   let remainingCountMessage = "";
   if (matchResponse.remainingCount !== undefined) {
     remainingCountMessage = `\n\nYou have ${matchResponse.remainingCount} more match requests available today.`;
+  }
+  
+  // Get a random match identifier image to send
+  elizaLogger.info(`[processMatchmaking] Attempting to get a random match image for user ${username}`);
+  const matchImagePath = getRandomMatchImage();
+  elizaLogger.info(`[processMatchmaking] Match image path result: ${matchImagePath || 'none'}`);
+  
+  if (matchImagePath) {
+    elizaLogger.info(`[processMatchmaking] Found match image: ${matchImagePath}`);
+    // Get the user's chat ID
+    elizaLogger.info(`[processMatchmaking] Getting chat ID for user ${username}`);
+    const userChatId = await getUserChatId(runtime, userPlatform, username);
+    elizaLogger.info(`[processMatchmaking] User chat ID result: ${userChatId || 'none'}`);
+    
+    if (userChatId) {
+      elizaLogger.info(`[processMatchmaking] Preparing to send image to user ${username} with chat ID ${userChatId}`);
+      
+      // Try to send the image directly with detailed logging
+      try {
+        elizaLogger.info(`[processMatchmaking] Calling sendTelegramImage with image: ${matchImagePath}`);
+        const result = await mongoProfileProvider.sendTelegramImage(
+          runtime,
+          username,
+          matchImagePath,
+          "Use this image to identify each other when meeting in person."
+        );
+        elizaLogger.info(`[processMatchmaking] Result of sendTelegramImage: ${result ? 'success' : 'failure'}`);
+      } catch (error) {
+        elizaLogger.error(`[processMatchmaking] Critical error sending image: ${error instanceof Error ? error.message : String(error)}`);
+        elizaLogger.error(`[processMatchmaking] Error stack: ${error instanceof Error && error.stack ? error.stack : 'No stack available'}`);
+      }
+    } else {
+      elizaLogger.error(`[processMatchmaking] Cannot send match image - no chat ID found for ${username}`);
+    }
+  } else {
+    elizaLogger.error(`[processMatchmaking] No match image found to send`);
   }
   
   return `${formattedResponse}${remainingCountMessage}`;

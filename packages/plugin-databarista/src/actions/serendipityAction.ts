@@ -432,6 +432,24 @@ export const serendipityAction: Action = {
         await mongoProfileProvider.recordMatches(runtime, platform, username, matchToRecord);
         elizaLogger.info(`Recorded the selected match in the user's profile`);
         
+        // Use hardcoded image path to send to both users
+        const matchImagePath = '/home/amir/DataBarista_v0.1/packages/plugin-databarista/src/assets/imagematch-01.jpg';
+        elizaLogger.info(`Using hardcoded match image: ${matchImagePath}`);
+        
+        // Send the image to the requesting user first
+        try {
+          elizaLogger.info(`Sending match image to requesting user ${username}`);
+          await mongoProfileProvider.sendTelegramImage(
+            runtime,
+            username,
+            matchImagePath,
+            "Use this image to identify each other when meeting in person."
+          );
+          elizaLogger.info(`Successfully sent image to requesting user ${username}`);
+        } catch (error) {
+          elizaLogger.error(`Error sending image to requesting user ${username}:`, error);
+        }
+        
         // Send notification to the matched user about the connection
         try {
           // Create a personalized message for the matched user
@@ -459,6 +477,20 @@ Good luck with the connection!
           
           if (notificationSent) {
             elizaLogger.info(`Successfully notified ${selectedMatch.matchUsername} about the match with ${username}`);
+            
+            // Also send the image to the matched user
+            try {
+              elizaLogger.info(`Sending match image to matched user ${selectedMatch.matchUsername}`);
+              await mongoProfileProvider.sendTelegramImage(
+                runtime,
+                selectedMatch.matchUsername,
+                matchImagePath,
+                "Use this image to identify each other when meeting in person."
+              );
+              elizaLogger.info(`Successfully sent image to matched user ${selectedMatch.matchUsername}`);
+            } catch (imageError) {
+              elizaLogger.error(`Error sending image to matched user ${selectedMatch.matchUsername}:`, imageError);
+            }
           } else {
             elizaLogger.warn(`Failed to notify ${selectedMatch.matchUsername} about the match with ${username}`);
           }
