@@ -16,7 +16,7 @@ import { MATCH_PROMPT_TEMPLATE, KG_EXTRACTION_TEMPLATE, IDEAL_MATCH_TEMPLATE } f
 import { SHACL_SHAPES } from "../utils/shaclShapes";
 import { profileCache } from "../utils/profileCache";
 import { mongoProfileProvider } from "../utils/mongoProfileProvider";
-import { v4 as uuidv4 } from "uuid";
+//import { v4 as uuidv4 } from "uuid";
 
 // Define interface for profile version data
 interface ProfileVersionData {
@@ -34,53 +34,50 @@ async function getOrFetchUserProfile(
 ): Promise<any> {
   // Use the mongoProfileProvider to get the profile data
   const profileData = await mongoProfileProvider.getProfile(runtime, platform, username, forceRefresh);
-    return profileData;
-  }
+  return profileData;
+}
 
 async function generateIdealMatchProfile(
   runtime: IAgentRuntime,
   userProfileData: any,
-  platform: string,
-  username: string,
   state?: State
-): Promise<string> {
-  // Update state with recent messages if not present
-  if (state && !state.recentMessages) {
-    state = await runtime.updateRecentMessageState(state);
+): Promise<string | null> {
+  try {
+    // Looking at the IDEAL_MATCH_TEMPLATE, we only need userProfileData
+    // No need to update state with recent messages as it's not used in the template
+    
+    const context = composeContext({
+      template: IDEAL_MATCH_TEMPLATE,
+      state: {
+        userProfileData: JSON.stringify(userProfileData, null, 2)
+      } as any
+    });
+
+    elizaLogger.debug('Generating ideal match profile with context');
+    const idealMatchResult = await generateObjectArray({
+      runtime,
+      context,
+      modelClass: ModelClass.LARGE
+    });
+
+    if (!idealMatchResult?.length) {
+      elizaLogger.error("Failed to generate ideal match profile: empty result");
+      return null;
+    }
+
+    // Extract the ideal match description text
+    const idealMatchDescription = idealMatchResult[0].ideal_match_description;
+    
+    if (!idealMatchDescription) {
+      elizaLogger.error("Invalid ideal match description format: missing ideal_match_description field");
+      return null;
+    }
+    
+    return idealMatchDescription;
+  } catch (error) {
+    elizaLogger.error(`Error generating ideal match profile: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
   }
-
-  // No need to strip embeddings as they are already excluded in the MongoDB query
-  const cleanUserProfileData = userProfileData;
-
-  const context = composeContext({
-    template: IDEAL_MATCH_TEMPLATE,
-    state: {
-      shaclShapes: SHACL_SHAPES,
-      userProfileData: JSON.stringify(cleanUserProfileData, null, 2),
-      platform,
-      username,
-      recentMessages: state?.recentMessages || []
-    } as any
-  });
-
-  const idealMatchResult = await generateObjectArray({
-    runtime,
-    context,
-    modelClass: ModelClass.LARGE
-  });
-
-  if (!idealMatchResult?.length) {
-    throw new Error("Failed to generate ideal match profile");
-  }
-
-  // Extract the ideal match description text
-  const idealMatchDescription = idealMatchResult[0].ideal_match_description;
-  
-  if (!idealMatchDescription) {
-    throw new Error("Invalid ideal match description format");
-  }
-  
-  return idealMatchDescription;
 }
 
 async function findMatchingProfilesWithAtlasSearch(
@@ -390,7 +387,7 @@ async function getMatches(
     }
     
     // Get the profile data for the ideal match
-    const idealMatchProfile = await generateIdealMatchProfile(runtime, profileData, platform, username, state);
+    const idealMatchProfile = await generateIdealMatchProfile(runtime, profileData, state);
 
     if (!idealMatchProfile) {
       elizaLogger.error(`Failed to generate ideal match profile`);
@@ -545,7 +542,7 @@ export async function processMatchmaking(
 ): Promise<string> {
   
   // Get the user's profile data
-  const userProfileData = await getOrFetchUserProfile(runtime, username, userPlatform);
+  const userProfileData = await getOrFetchUserProfile(runtime, userPlatform, username);
   
   if (!userProfileData || !userProfileData.profileData) {
     elizaLogger.error(`Failed to fetch profile data for user ${username} on ${userPlatform}`);
@@ -772,7 +769,15 @@ export const publishAndFindMatch: Action = {
 
       elizaLogger.info("=== Starting Match Search ===");
       // Generate ideal match profile based on the user's profile
-      const idealMatchDescription = await generateIdealMatchProfile(runtime, newProfileData, platform, username, state);
+      const idealMatchDescription = await generateIdealMatchProfile(runtime, newProfileData, state);
+      
+      if (!idealMatchDescription) {
+        elizaLogger.error("Failed to generate ideal match profile description");
+        callback({
+          text: "I'm sorry, but I encountered an error while trying to find a match for you. Please try again later."
+        });
+        return;
+      }
       
       // Generate embedding for the ideal match profile
       elizaLogger.info("Generating embedding for ideal match profile");

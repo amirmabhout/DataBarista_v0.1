@@ -29,17 +29,15 @@ async function getOrFetchUserProfile(
 
 // This function is adapted from publishAndFindMatch.ts
 async function generateIdealMatchProfile(
-    runtime: IAgentRuntime,
-    userProfileData: any,
-    platform: string,
-    username: string,
-    state?: State
-  ): Promise<string> {
-  elizaLogger.info("=== Starting Ideal Match Profile Generation ===");
+  runtime: IAgentRuntime,
+  userProfileData: any,
+  state?: State
+): Promise<string | null> {
+  try {
+    elizaLogger.info("=== Starting Ideal Match Profile Generation ===");
     elizaLogger.info("Input Parameters:");
     elizaLogger.info("User Profile Data:", JSON.stringify(userProfileData, null, 2));
-    elizaLogger.info("Platform:", platform);
-    elizaLogger.info("Username:", username);
+
 
     // Update state with recent messages if not present
     if (state && !state.recentMessages) {
@@ -51,40 +49,44 @@ async function generateIdealMatchProfile(
   const cleanUserProfileData = userProfileData;
 
     const context = composeContext({
-    template: IDEAL_MATCH_TEMPLATE,
+      template: IDEAL_MATCH_TEMPLATE,
       state: {
         shaclShapes: SHACL_SHAPES,
-      userProfileData: JSON.stringify(cleanUserProfileData, null, 2),
-        platform,
-        username,
+        userProfileData: JSON.stringify(cleanUserProfileData, null, 2),
         recentMessages: state?.recentMessages || []
       } as any
     });
 
-  const idealMatchResult = await generateObjectArray({
+    const idealMatchResult = await generateObjectArray({
       runtime,
       context,
       modelClass: ModelClass.LARGE
     });
 
-  if (!idealMatchResult?.length) {
-    throw new Error("Failed to generate ideal match profile");
+    if (!idealMatchResult?.length) {
+      elizaLogger.error("Failed to generate ideal match profile: empty result");
+      return null;
     }
 
-  elizaLogger.info("=== Ideal Match Profile Generation Result ===");
-  elizaLogger.info("Raw Result:", JSON.stringify(idealMatchResult, null, 2));
+    elizaLogger.info("=== Ideal Match Profile Generation Result ===");
+    elizaLogger.info("Raw Result:", JSON.stringify(idealMatchResult, null, 2));
     elizaLogger.info("================================");
 
-  // Extract the ideal match description text
-  const idealMatchDescription = idealMatchResult[0].ideal_match_description;
-  
-  if (!idealMatchDescription) {
-    throw new Error("Invalid ideal match description format");
+    // Extract the ideal match description text
+    const idealMatchDescription = idealMatchResult[0].ideal_match_description;
+    
+    if (!idealMatchDescription) {
+      elizaLogger.error("Invalid ideal match description format: missing ideal_match_description field");
+      return null;
+    }
+    
+    elizaLogger.info("Generated ideal match description:", idealMatchDescription.substring(0, 200) + "...");
+    
+    return idealMatchDescription;
+  } catch (error) {
+    elizaLogger.error(`Error generating ideal match profile: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
   }
-  
-  elizaLogger.info("Generated ideal match description:", idealMatchDescription.substring(0, 200) + "...");
-  
-  return idealMatchDescription;
 }
 
 /**
@@ -353,7 +355,15 @@ export const serendipityAction: Action = {
 
       // Generate ideal match profile based on the user's profile
       elizaLogger.info("=== Starting Match Search ===");
-      const idealMatchDescription = await generateIdealMatchProfile(runtime, rawProfile, platform, username, activeState);
+      const idealMatchDescription = await generateIdealMatchProfile(runtime, rawProfile, activeState);
+      
+      if (!idealMatchDescription) {
+        elizaLogger.error("Failed to generate ideal match profile description");
+        callback({
+          text: "I'm sorry, but I encountered an error while trying to find a match for you. Please try again later."
+        });
+        return false;
+      }
       
       // Generate embedding for the ideal match profile
       elizaLogger.info("Generating embedding for ideal match profile");
