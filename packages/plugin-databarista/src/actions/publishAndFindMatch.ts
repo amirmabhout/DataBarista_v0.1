@@ -494,6 +494,7 @@ async function formatMatchesAsText(
       elizaLogger.info(`Recorded the selected match in the user's profile`);
 
       // Use hardcoded image path instead of getRandomMatchImage()
+      elizaLogger.info(`Using hardcoded match image`);
       const matchImagePath = '/home/amir/DataBarista_v0.1/packages/plugin-databarista/src/assets/imagematch-01.jpg';
       elizaLogger.info(`Using hardcoded match image`);
       elizaLogger.info(`Recorded the selected match in the user's profile`);
@@ -528,7 +529,7 @@ I just connected you with @${username} who was looking for someone with your exp
 
 Here's what I told them about you:
 ----------
-${postMessage.replace(`@${username}`, 'They').replace(`@${matchData.matchUsername}`, 'you')}
+${postMessage}
 ----------
 
 Good luck with the connection!
