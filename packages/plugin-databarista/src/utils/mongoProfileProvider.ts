@@ -1,7 +1,5 @@
-import { elizaLogger, type HandlerCallback } from "@elizaos/core";
-import type { IAgentRuntime } from "@elizaos/core";
+import { IAgentRuntime, elizaLogger, type HandlerCallback } from "@elizaos/core";
 import { MongoClient } from 'mongodb';
-import fs from 'fs';
 
 // Define InterestChats locally instead of importing from client-telegram
 interface InterestChats {
@@ -55,7 +53,6 @@ interface TelegramMessageManager {
   };
   getUserChatId?: (username: string) => string | undefined;
   getAllUserChatIds?: () => Record<string, string>;
-  sendImageToChatId?: (chatId: string, imagePath: string, caption?: string) => Promise<void>;
 }
 
 interface TelegramClient {
@@ -633,114 +630,6 @@ class MongoProfileProvider {
       return false;
     } catch (error) {
       elizaLogger.error(`Error in sendNotification: ${error}`);
-      return false;
-    }
-  }
-  
-  /**
-   * Send an image to a Telegram user
-   * @param runtime Agent runtime
-   * @param username Username of the recipient
-   * @param imagePath Path to the image file
-   * @param caption Optional caption for the image
-   * @returns Success status
-   */
-  async sendTelegramImage(
-    runtime: IAgentRuntime,
-    username: string,
-    imagePath: string,
-    caption?: string
-  ): Promise<boolean> {
-    try {
-      elizaLogger.info(`[sendTelegramImage] *** STARTING IMAGE SENDING PROCESS ***`);
-      elizaLogger.info(`[sendTelegramImage] Sending image to user: ${username}`);
-      elizaLogger.info(`[sendTelegramImage] Image path: ${imagePath}`);
-      
-      // Check if the image file exists
-      if (!imagePath) {
-        elizaLogger.error(`[sendTelegramImage] No image path provided`);
-        return false;
-      }
-      
-      // Verify file exists using sync method for clearer error reporting
-      if (!fs.existsSync(imagePath)) {
-        elizaLogger.error(`[sendTelegramImage] Image file does not exist at path: ${imagePath}`);
-        return false;
-      }
-      
-      // Log file stats for debugging
-      const stats = fs.statSync(imagePath);
-      elizaLogger.info(`[sendTelegramImage] Image file exists, size: ${stats.size} bytes`);
-      
-      // Get the user's chat ID
-      elizaLogger.info(`[sendTelegramImage] Getting chat ID for user ${username}`);
-      const chatId = await this.getTelegramChatId(runtime, username);
-      if (!chatId) {
-        elizaLogger.error(`[sendTelegramImage] No chat ID found for user ${username}`);
-        return false;
-      }
-      elizaLogger.info(`[sendTelegramImage] Retrieved chat ID: ${chatId} for user ${username}`);
-      
-      // Send the image using the Telegram client
-      const telegramClient = runtime.clients['telegram'] as TelegramClient;
-      if (!telegramClient) {
-        elizaLogger.error(`[sendTelegramImage] Telegram client not available in runtime`);
-        return false;
-      }
-      
-      if (!telegramClient.messageManager) {
-        elizaLogger.error(`[sendTelegramImage] Telegram messageManager not available`);
-        return false;
-      }
-      
-      // Log that we're about to send the image
-      elizaLogger.info(`[sendTelegramImage] Ready to send image to ${username} (chat ID: ${chatId})`);
-      
-      // Try both methods of sending the image
-      if (telegramClient.messageManager.sendImageToChatId) {
-        // Method 1: Use the message manager's sendImageToChatId method
-        elizaLogger.info(`[sendTelegramImage] Attempting to send via sendImageToChatId method`);
-        
-        try {
-          await telegramClient.messageManager.sendImageToChatId(
-            chatId,
-            imagePath,
-            caption
-          );
-          elizaLogger.info(`[sendTelegramImage] Successfully sent image to ${username}`);
-          return true;
-        } catch (sendError) {
-          elizaLogger.error(`[sendTelegramImage] Error in sendImageToChatId:`, sendError);
-          // Fall through to try the other method
-        }
-      } else {
-        elizaLogger.warn(`[sendTelegramImage] sendImageToChatId method not available`);
-      }
-      
-      // Method 2: Try using bot.telegram.sendPhoto directly if available
-      if (telegramClient.bot?.telegram?.sendPhoto) {
-        elizaLogger.info(`[sendTelegramImage] Attempting to send via bot.telegram.sendPhoto`);
-        
-        try {
-          // @ts-ignore - sendPhoto may not be in the type definitions
-          await telegramClient.bot.telegram.sendPhoto(
-            chatId,
-            { source: imagePath },
-            { caption: caption }
-          );
-          elizaLogger.info(`[sendTelegramImage] Successfully sent image via bot.telegram.sendPhoto`);
-          return true;
-        } catch (sendError) {
-          elizaLogger.error(`[sendTelegramImage] Error in bot.telegram.sendPhoto:`, sendError);
-        }
-      } else {
-        elizaLogger.error(`[sendTelegramImage] Neither sendImageToChatId nor sendPhoto methods are available`);
-      }
-      
-      elizaLogger.error(`[sendTelegramImage] Failed to send image to ${username} - no working method found`);
-      return false;
-    } catch (error) {
-      elizaLogger.error(`[sendTelegramImage] Unexpected error sending image to ${username}:`, error);
       return false;
     }
   }
