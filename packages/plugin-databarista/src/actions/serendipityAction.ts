@@ -20,6 +20,7 @@ import {
   recordMatchRequest,
   recordMatches
 } from "../utils/matchingUtils";
+import { DAILY_MATCH_LIMIT } from "../utils/constants";
 
   
 export const serendipityAction: Action = {
@@ -57,7 +58,7 @@ export const serendipityAction: Action = {
       const matchLimit = await checkMatchLimit(runtime, platform, username);
       
       if (matchLimit.isLimited) {
-        elizaLogger.info(`User has reached the daily match limit of 5 matches.`);
+        elizaLogger.info(`User has reached the daily match limit of ${DAILY_MATCH_LIMIT} matches.`);
         
         const resetTime = new Date(matchLimit.resetTime || new Date());
         const formattedResetTime = resetTime.toLocaleString('en-US', {
@@ -67,7 +68,7 @@ export const serendipityAction: Action = {
         });
         
         callback({ 
-          text: `You've reached your match limit for today (5 matches per day). You can request more matches after ${formattedResetTime}.`
+          text: `You've reached your match limit for today (${DAILY_MATCH_LIMIT} matches per day). You can request more matches after ${formattedResetTime}.`
         });
         return true;
       }

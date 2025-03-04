@@ -15,13 +15,13 @@ Potential Match Data:
 {{matchesData}}
 
 Task:
-From the above data, choose the best match that aligns with the user's interests.
-IMPORTANT: Never select the user's own profile as a match. If the user's profile appears in the potential matches, ignore it and select a different match.
+From the above data, choose the best match that is mutual for both user and the match, benefiting from a potential overlapping opportunity.
+IMPORTANT: Never select the user's own profile as a match. If the user's profile appears in the potential matches, ignore it and select a different match. If a match works at a similar company with the user, do not select it, since they might already know each other.
 
 Generate a friendly social media post that introduces the user and the best match together.
 The post should:
 1. Use the proper @username for both user and the best match chosen
-2. Highlight their synergy and how they might help solve each other
+2. Highlight their synergy and potential opportunity for collaboration, highlight how they can help each other in each other's challenges
 3. Do not use hashtags
 
 Return an array containing a single object with the following structure:

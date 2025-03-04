@@ -9,10 +9,9 @@ import {
   type Action,
   composeContext,
   generateObjectArray,
-  embed
 } from "@elizaos/core";
 import { MongoClient } from 'mongodb';
-import { MATCH_PROMPT_TEMPLATE, KG_EXTRACTION_TEMPLATE, IDEAL_MATCH_TEMPLATE } from "../utils/promptTemplates";
+import { MATCH_PROMPT_TEMPLATE, KG_EXTRACTION_TEMPLATE} from "../utils/promptTemplates";
 import { SHACL_SHAPES } from "../utils/shaclShapes";
 import { getProfile } from "../utils/profileUtils";
 import { 
@@ -24,6 +23,7 @@ import {
   recordMatchRequest,
   recordMatches
 } from "../utils/matchingUtils";
+import { DAILY_MATCH_LIMIT } from "../utils/constants";
 
 
 // Define interface for profile version data
@@ -110,7 +110,8 @@ async function storeProfileInCkg(
         created: new Date(),
         lastUpdated: new Date(),
         agentId, // Add agent ID
-        agentUsername // Add agent username
+        agentUsername, // Add agent username
+        community: agentUsername // Set community field to current agent username on first profile creation
       };
 
       // Add chatId if provided
@@ -145,7 +146,7 @@ async function getMatches(
     const matchLimit = await checkMatchLimit(runtime, platform, username);
     
     if (matchLimit.isLimited) {
-      elizaLogger.info(`User has reached the daily match limit of 5 matches.`);
+      elizaLogger.info(`User has reached the daily match limit of ${DAILY_MATCH_LIMIT} matches.`);
       return {
         matches: [],
         limitReached: true,
@@ -308,7 +309,7 @@ export async function processMatchmaking(
       minute: 'numeric',
       hour12: true
     });
-    return `You've reached your match limit for today (5 matches per day). You can request more matches after ${formattedResetTime}.`;
+    return `You've reached your match limit for today (${DAILY_MATCH_LIMIT} matches per day). You can request more matches after ${formattedResetTime}.`;
   }
   
   if (!matchResponse.matches || matchResponse.matches.length === 0) {

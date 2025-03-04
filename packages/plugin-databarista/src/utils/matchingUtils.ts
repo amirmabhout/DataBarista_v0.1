@@ -12,6 +12,7 @@ import {
 import { MongoClient } from 'mongodb';
 import { IDEAL_MATCH_TEMPLATE } from "./promptTemplates";
 import { SHACL_SHAPES } from "./shaclShapes";
+import { DAILY_MATCH_LIMIT } from "./constants";
 
 /**
  * Interface for profile data returned from MongoDB CKG
@@ -40,6 +41,7 @@ interface ProfileData {
   }>;
   // Store original Telegram chat ID for sending notifications
   telegramChatId?: string;
+  agentUsername?: string;
 }
 
 interface TelegramMessageManager {
@@ -305,16 +307,15 @@ export async function notifyMatchedUser(
   try {
     // Create a personalized message for the matched user
     const matchNotificationMessage = `
-Hello @${matchedUsername}! 
+Hey @${matchedUsername}! ☕️
 
-I just connected you with @${username} who was looking for someone with your expertise. They'll probably reach out to you soon.
+${username} just dropped by my café chatting about their latest challenge, and I immediately thought of you. Couldn't resist passing along your contact—hope that's cool! Here's the brew I served up about you:
 
-Here's what I told them about you:
 ----------
 ${postMessage}
 ----------
 
-Good luck with the connection!
+Hope you two stir up something amazing together! Thanks a latte! ☕️✨
 `;
     
     // Send the notification
@@ -357,7 +358,7 @@ export async function checkMatchLimit(
     
     if (!connectionString || !dbName) {
       elizaLogger.error('Missing MongoDB connection settings');
-      return { isLimited: false, remaining: 5 };
+      return { isLimited: false, remaining: DAILY_MATCH_LIMIT };
     }
     
     const client = new MongoClient(connectionString);
@@ -376,7 +377,7 @@ export async function checkMatchLimit(
     
     if (!profile) {
       // If no profile, they haven't made any requests yet
-      return { isLimited: false, remaining: 5 };
+      return { isLimited: false, remaining: DAILY_MATCH_LIMIT };
     }
     
     const matchRequests = profile.matchRequests || [];
@@ -392,8 +393,8 @@ export async function checkMatchLimit(
     const totalCount = recentRequests.reduce((sum, request) => sum + request.count, 0);
     
     // Check if limit is reached
-    const isLimited = totalCount >= 5;
-    const remaining = Math.max(0, 5 - totalCount);
+    const isLimited = totalCount >= DAILY_MATCH_LIMIT;
+    const remaining = Math.max(0, DAILY_MATCH_LIMIT - totalCount);
     
     // Calculate when the limit will reset (when the oldest request becomes > 24h old)
     let resetTime;
@@ -408,7 +409,7 @@ export async function checkMatchLimit(
   } catch (error) {
     elizaLogger.error('Error checking match limit:', error);
     // Default to not limited in case of error
-    return { isLimited: false, remaining: 5 };
+    return { isLimited: false, remaining: DAILY_MATCH_LIMIT };
   }
 }
 
@@ -593,18 +594,41 @@ export async function sendNotification(
   try {
     // Only use the chat ID from the CKG database
     if (platform === 'telegram') {
-      const storedChatId = await getTelegramChatId(runtime, username);
-      if (storedChatId) {
-        try {
-          const telegramClient = runtime.clients['telegram'] as TelegramClient;
-          await telegramClient.bot.telegram.sendMessage(storedChatId, message);
-          return true;
-        } catch (error) {
-          elizaLogger.error(`Failed to send Telegram message to ${username}: ${error}`);
+      // Retrieve user profile to get both chat ID and associated agent username
+      const userProfile = await getUserProfile(runtime, username);
+      
+      if (!userProfile) {
+        elizaLogger.warn(`No user profile found for user ${username}`);
+        return false;
+      }
+      
+      const storedChatId = userProfile.telegramChatId;
+      const agentUsername = userProfile.agentUsername;
+      
+      if (!storedChatId) {
+        elizaLogger.warn(`No chat ID found for user ${username}`);
+        return false;
+      }
+      
+      try {
+        // Get the appropriate Telegram bot token based on the agent username
+        const botToken = getTelegramBotToken(runtime, agentUsername);
+        
+        if (!botToken) {
+          elizaLogger.error(`No Telegram bot token configured for agent ${agentUsername}`);
           return false;
         }
-      } else {
-        elizaLogger.warn(`No chat ID found for user ${username}`);
+        
+        // Create a temporary Telegram bot instance with the correct token
+        const { Telegraf } = await import('telegraf');
+        const tempBot = new Telegraf(botToken);
+        
+        // Send the message using the temporary bot
+        await tempBot.telegram.sendMessage(storedChatId, message);
+        elizaLogger.info(`Successfully sent message to ${username} using bot for agent ${agentUsername}`);
+        return true;
+      } catch (error) {
+        elizaLogger.error(`Failed to send Telegram message to ${username}: ${error}`);
         return false;
       }
     }
@@ -617,19 +641,39 @@ export async function sendNotification(
 }
 
 /**
- * Retrieve a user's stored Telegram chat ID
+ * Get the appropriate Telegram bot token based on agent username
  * @param runtime Agent runtime
- * @param username Telegram username
- * @returns The original Telegram chat ID or null if not found
+ * @param agentUsername Agent username associated with the user
+ * @returns Telegram bot token
  */
-export async function getTelegramChatId(
-  runtime: IAgentRuntime,
-  username: string
-): Promise<string | null> {
+function getTelegramBotToken(runtime: IAgentRuntime, agentUsername?: string): string | undefined {
+  // Default to the current runtime's token if no agent username specified
+  if (!agentUsername) {
+    return runtime.getSetting('TELEGRAM_BOT_TOKEN');
+  }
+  
+  // Get tokens from environment variables based on agent username
+  // Format: TELEGRAM_BOT_TOKEN_AGENTNAME (with non-alphanumeric chars removed)
+  const safeAgentName = agentUsername.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  const tokenEnvKey = `TELEGRAM_BOT_TOKEN_${safeAgentName}`;
+  
+  // Try to get the specific token for this agent
+  const agentSpecificToken = runtime.getSetting(tokenEnvKey);
+  
+  // Use the specific token if available, otherwise fall back to the default token
+  return agentSpecificToken || runtime.getSetting('TELEGRAM_BOT_TOKEN');
+}
+
+/**
+ * Get the user's profile data
+ * @param runtime Agent runtime
+ * @param username Username to look up
+ * @returns User profile data or null if not found
+ */
+async function getUserProfile(runtime: IAgentRuntime, username: string): Promise<ProfileData | null> {
   try {
     // Clean the username - ensure no @ prefix for database queries
     const cleanUsername = username.replace(/^@/, '');
-    elizaLogger.info(`[getTelegramChatId] Looking up chat ID for user ${cleanUsername}`);
     
     const connectionString = runtime.getSetting('MONGODB_CONNECTION_STRING_CKG');
     const dbName = runtime.getSetting('MONGODB_DATABASE_CKG');
@@ -645,23 +689,17 @@ export async function getTelegramChatId(
     const db = client.db(dbName);
     const collection = db.collection('telegram');
     
-    // Look for the stored chat ID
+    // Look for the user profile
     const profile = await collection.findOne(
-      { platform: 'telegram', username: cleanUsername },
-      { projection: { telegramChatId: 1 } }
+      { platform: 'telegram', username: cleanUsername }
     );
     
     await client.close();
     
-    if (profile && profile.telegramChatId) {
-      elizaLogger.info(`[getTelegramChatId] Found chat ID ${profile.telegramChatId} for ${cleanUsername}`);
-      return profile.telegramChatId;
-    }
-    
-    elizaLogger.warn(`[getTelegramChatId] No chat ID found for user ${cleanUsername}`);
-    return null;
+    // Cast the MongoDB document to ProfileData type
+    return profile as unknown as ProfileData;
   } catch (error) {
-    elizaLogger.error(`[getTelegramChatId] Error retrieving chat ID for ${username}:`, error);
+    elizaLogger.error(`Error retrieving profile for ${username}:`, error);
     return null;
   }
 } 

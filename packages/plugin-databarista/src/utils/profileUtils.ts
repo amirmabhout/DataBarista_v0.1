@@ -27,6 +27,7 @@ interface ProfileData {
     count: number;
   }>;
   telegramChatId?: string;
+  community?: string;
 }
 
 // Database connection singleton
