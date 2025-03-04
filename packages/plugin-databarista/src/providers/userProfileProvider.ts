@@ -1,13 +1,32 @@
 import { Provider, IAgentRuntime, Memory, State, elizaLogger } from "@elizaos/core";
 // @ts-ignore
 import DKG from "dkg.js";
-import { USER_PROFILE_QUERY } from "../utils/sparqlQueries";
 import { DkgClientConfig } from "../utils/types";
-import { profileCache } from "../utils/profileCache";
-import { mongoProfileProvider } from "../utils/mongoProfileProvider";
-import { stripEmbeddings } from "../utils/profileUtils";
+import { getProfile } from "../utils/profileUtils";
 
 let DkgClient: any = null;
+
+/**
+ * Helper function to remove embeddings from user profile data
+ * @param userData User profile data
+ * @returns User profile data without embeddings
+ */
+function stripEmbeddings(userData: any[]): any[] {
+    return userData.map(profile => {
+        // Create a safe copy of the profile
+        const cleanProfile = { ...profile };
+        
+        // Remove embedding fields if they exist
+        if (cleanProfile.latestProfile?.public?.embedding) {
+            delete cleanProfile.latestProfile.public.embedding;
+        }
+        if (cleanProfile.latestProfile?.private?.embedding) {
+            delete cleanProfile.latestProfile.private.embedding;
+        }
+        
+        return cleanProfile;
+    });
+}
 
 //TODO; currently sparql query is only getting latest intent ids, but later should get all unique ids and their latest revision timestamp
 
@@ -47,8 +66,8 @@ const userProfileProvider: Provider = {
                 platform
             });
 
-            // Get profile from MongoDB
-            let userData = await mongoProfileProvider.getProfile(runtime, platform, username);
+            // Get profile using the profileUtils.getProfile function
+            let userData = await getProfile(runtime, platform, username);
 
             // If no data found
             if (!userData || userData.length === 0) {

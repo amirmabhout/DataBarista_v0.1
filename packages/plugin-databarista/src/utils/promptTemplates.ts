@@ -110,7 +110,7 @@ User Profile:
 {{userProfileData}}
 
 Task:
-Based on the user's profile and intent data, generate a detailed text description of the IDEAL match for this user. This description will be used directly for vector similarity search to find matching profiles.
+Based on the user's profile and goals data, generate a detailed text description of the IDEAL match for this user. This description will be used directly for vector similarity search to find matching profiles.
 
 Focus on describing someone who would:
 1. Have knowledge domains that complement the user's needs
@@ -123,7 +123,7 @@ Create a coherent, detailed paragraph (250-500 words) that thoroughly describes 
 - Skills and capabilities
 - Knowledge domains and specializations
 - Project types and experience
-- Desired connections of the ideal match to match user profile
+- Desired connections the ideal match seeks
 
 The text should be rich in relevant keywords that would help in semantic matching but remain natural-sounding.
 

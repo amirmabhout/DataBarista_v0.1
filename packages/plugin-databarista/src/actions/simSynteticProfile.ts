@@ -1236,7 +1236,7 @@ async function publishSyntheticProfile(
     
     const client = await new MongoClient(connectionString).connect();
     const db = client.db(dbName);
-    const collection = db.collection('profiles');
+    const collection = db.collection(platform);
     
     // Find existing document for this user
     const existingDoc = await collection.findOne({ platform, username });

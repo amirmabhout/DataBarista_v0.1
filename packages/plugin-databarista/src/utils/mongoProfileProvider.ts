@@ -1,18 +1,6 @@
 import { IAgentRuntime, elizaLogger, type HandlerCallback } from "@elizaos/core";
 import { MongoClient } from 'mongodb';
 
-// Define InterestChats locally instead of importing from client-telegram
-interface InterestChats {
-  [key: string]: {
-    currentHandler?: string;
-    lastMessageSent?: number;
-    messages: Array<{
-      userName: string;
-      chatId?: string;
-      messageText?: string;
-    }>;
-  };
-}
 
 /**
  * Interface for profile data returned from MongoDB CKG
@@ -69,7 +57,7 @@ interface TelegramClient {
  */
 class MongoProfileProvider {
   private ckgClient: MongoClient | null = null;
-  private readonly PROFILES_COLLECTION = 'profiles';
+  private readonly PROFILES_COLLECTION = 'telegram';
 
   /**
    * Ensure connection to the MongoDB CKG database
@@ -120,7 +108,7 @@ class MongoProfileProvider {
       
       const client = await this.ensureCkgConnection(runtime);
       const db = client.db(runtime.getSetting('MONGODB_DATABASE_CKG'));
-      const collection = db.collection(this.PROFILES_COLLECTION);
+      const collection = db.collection(platform);
       
       // Optimized query that only fetches the necessary fields
       // and explicitly excludes the embedding field
@@ -170,7 +158,7 @@ class MongoProfileProvider {
     try {
       const client = await this.ensureCkgConnection(runtime);
       const db = client.db(runtime.getSetting('MONGODB_DATABASE_CKG'));
-      const collection = db.collection(this.PROFILES_COLLECTION);
+      const collection = db.collection(platform);
       
       // Get the user profile
       const profile = await collection.findOne(
@@ -231,7 +219,7 @@ class MongoProfileProvider {
     try {
       const client = await this.ensureCkgConnection(runtime);
       const db = client.db(runtime.getSetting('MONGODB_DATABASE_CKG'));
-      const collection = db.collection(this.PROFILES_COLLECTION);
+      const collection = db.collection(platform);
       
       const now = new Date();
       
@@ -277,7 +265,7 @@ class MongoProfileProvider {
       
       const client = await this.ensureCkgConnection(runtime);
       const db = client.db(runtime.getSetting('MONGODB_DATABASE_CKG'));
-      const collection = db.collection(this.PROFILES_COLLECTION);
+      const collection = db.collection(platform);
       
       const now = new Date();
       
@@ -323,7 +311,7 @@ class MongoProfileProvider {
     try {
       const client = await this.ensureCkgConnection(runtime);
       const db = client.db(runtime.getSetting('MONGODB_DATABASE_CKG'));
-      const collection = db.collection(this.PROFILES_COLLECTION);
+      const collection = db.collection(platform);
       
       const profile = await collection.findOne(
         { platform, username },
@@ -653,7 +641,7 @@ class MongoProfileProvider {
       
       const client = await this.ensureCkgConnection(runtime);
       const db = client.db(runtime.getSetting('MONGODB_DATABASE_CKG'));
-      const collection = db.collection(this.PROFILES_COLLECTION);
+      const collection = db.collection(platform);
       
       // Check if user exists in profiles collection
       const existingProfile = await collection.findOne({ 
