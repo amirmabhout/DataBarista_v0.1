@@ -12,6 +12,24 @@ Result: [IGNORE]
 {{user1}}: Hi everyone, I’m starting a new AI project
 Result: [RESPOND]
 
+{{user1}}: Hi all, I'm Sarah and I'm building TradeSense, a platform that leverages AI to automate crypto trading strategies. We already have a basic bot running, but I'm exploring integrating Eliza agents to manage trades autonomously with investor funds.
+Result: [RESPOND]
+
+{{user1}}: Hi all, I'm Sarah and I'm building TradeSense, a platform that leverages AI to automate crypto trading strategies. We already have a basic bot running, but I'm exploring integrating Eliza agents to manage trades autonomously with investor funds.
+DataBarista: Hi Sarah, that sounds fascinating! What types of crypto trading strategies are you looking into?
+{{user1}}: Currently, I'm considering a straightforward strategy that places trades based on market sentiment analysis.
+Result: [RESPOND]
+
+{{user1}}: Hey everyone, I'm Alex, founder of MarketMind, an app focused on AI-driven stock market predictions. We have a prediction engine in place, and now I'm looking at using Eliza agents to autonomously execute trades funded by our investors.
+DataBarista: Hey Alex, that's an exciting initiative! What kind of prediction-based trading strategies are you planning to implement?
+{{user1}}: I'm thinking of starting with a simple strategy that trades based on predicted stock price movements.
+Result: [RESPOND]
+
+{{user1}}: Hello folks, I'm Mia, working on BetWise, a startup creating AI-powered betting tools for sports markets. We currently have a prediction aggregator, but I'm interested in using Eliza agents to autonomously place bets using investor-provided bankrolls.
+DataBarista: Hi Mia, your project sounds intriguing! What betting strategies are you considering for your AI agents?
+{{user1}}: I'm looking at a basic strategy that bets according to predicted outcomes of sports events.
+Result: [RESPOND]
+
 {{user1}}: I’m struggling with hiring a designer for my app
 Result: [RESPOND]
 
@@ -41,13 +59,15 @@ Result: [IGNORE]
 
 Response options are [RESPOND], [IGNORE], and [STOP].
 
-DataBarista is in a Telegram channel with other users and should only respond when users introduce themselves, talk about their challenges, or express a need to find someone or something related to their projects or needs.
+DataBarista is in a Telegram channel with other users and should only respond when users introduce themselves, talk about their projects, challenges, or express a need to find someone or something related to their projects or needs.
 
 Respond with [RESPOND] to messages that:
-- Introduce a user or their project
+- Introdution message of a user or their project
 - Mention challenges or problems the user is facing
 - Express a need to find someone or something
 - Directly address DataBarista with a relevant request
+- Message that was a reply to DataBarista's followup question
+
 
 If a message does not meet these criteria, respond with [IGNORE]
 
@@ -62,9 +82,6 @@ The goal is to decide whether DataBarista should respond to the last message.
 
 {{recentMessages}}
 
-Thread of messages you are replying to:
-
-{{formattedConversation}}
 
 # INSTRUCTIONS: Choose the option that best describes {{agentName}}'s response to the last message. Ignore messages if they are addressed to someone else.
 ` + shouldRespondFooter;

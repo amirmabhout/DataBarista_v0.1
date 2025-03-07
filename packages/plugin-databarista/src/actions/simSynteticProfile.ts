@@ -1236,7 +1236,9 @@ async function publishSyntheticProfile(
     
     const client = await new MongoClient(connectionString).connect();
     const db = client.db(dbName);
-    const collection = db.collection(platform);
+    // Check if MONGODB_DATABASE_COLLECTION is set in environment, otherwise use platform
+    const collectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || platform;
+    const collection = db.collection(collectionName);
     
     // Find existing document for this user
     const existingDoc = await collection.findOne({ platform, username });

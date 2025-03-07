@@ -84,7 +84,10 @@ export async function getProfile(
     
     const client = await ensureCkgConnection(runtime);
     const db = client.db(runtime.getSetting('MONGODB_DATABASE_CKG'));
-    const collection = db.collection(platform);
+    
+    // Check if MONGODB_DATABASE_COLLECTION is set in environment, otherwise use platform
+    const collectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || platform;
+    const collection = db.collection(collectionName);
     
     // Optimized query that only fetches the necessary fields
     // and explicitly excludes the embedding field

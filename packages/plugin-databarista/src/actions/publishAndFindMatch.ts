@@ -23,7 +23,7 @@ import {
   recordMatchRequest,
   recordMatches
 } from "../utils/matchingUtils";
-import { DAILY_MATCH_LIMIT } from "../utils/constants";
+import { DAILY_MATCH_LIMIT, SEND_TELEGRAM_GROUP_INVITES, MONGODB_VECTOR_INDEX_ENV_VAR } from "../utils/constants";
 
 
 // Define interface for profile version data
@@ -40,12 +40,31 @@ async function storeProfileInCkg(
   username: string,
   publicJsonLd: any,
   privateJsonLd: any,
-  chatId?: string
+  chatId?: string,
+  telegramClient?: any
 ): Promise<boolean> {
   try {
     // Get agent details from runtime
     const agentId = runtime.agentId;
-    const agentUsername = runtime.character?.username || runtime.character?.name;
+    
+    // Get the true bot username from the Telegram client if available
+    let agentUsername = runtime.character?.username || runtime.character?.name;
+    
+    // If telegramClient was explicitly passed and has bot info, use its username
+    if (telegramClient?.bot?.botInfo?.username) {
+      // Remove @ prefix if present
+      agentUsername = telegramClient.bot.botInfo.username.replace(/^@/, '');
+      elizaLogger.info(`Using actual bot username for profile: ${agentUsername}`);
+    } else {
+      // Fallback to trying to get the client from runtime if not passed directly
+      const runtimeTelegramClient = runtime.clients['telegram'] as any;
+      if (runtimeTelegramClient?.bot?.botInfo?.username) {
+        agentUsername = runtimeTelegramClient.bot.botInfo.username.replace(/^@/, '');
+        elizaLogger.info(`Using actual bot username from runtime for profile: ${agentUsername}`);
+      } else {
+        elizaLogger.warn(`Could not get bot username from any Telegram client, using fallback: ${agentUsername}`);
+      }
+    }
     
     // Prepare current profile data version
     const currentProfileData: ProfileVersionData = {
@@ -65,7 +84,9 @@ async function storeProfileInCkg(
     // Store the profile data using MongoDB
     const client = await new MongoClient(runtime.getSetting('MONGODB_CONNECTION_STRING_CKG')).connect();
     const db = client.db(runtime.getSetting('MONGODB_DATABASE_CKG'));
-    const collection = db.collection(platform);
+    // Check if MONGODB_DATABASE_COLLECTION is set in environment, otherwise use platform
+    const collectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || platform;
+    const collection = db.collection(collectionName);
     
     // Find existing document for this user
     const existingDoc = await collection.findOne({ platform, username });
@@ -338,6 +359,8 @@ export const publishAndFindMatch: Action = {
       "MONGODB_CONNECTION_STRING_CKG",
       "MONGODB_DATABASE_CKG",
       "TELEGRAM_INVITE_LINK",
+      // MONGODB_VECTOR_INDEX_NAME is optional as it falls back to DEFAULT_VECTOR_INDEX_NAME
+      // MONGODB_DATABASE_COLLECTION is optional as it falls back to platform name
     ];
 
     const missingVars = requiredEnvVars.filter((varName) => !runtime.getSetting(varName));
@@ -464,7 +487,7 @@ export const publishAndFindMatch: Action = {
       }
 
       // Store profile in MongoDB CKG with chat ID if available
-      const storeResult = await storeProfileInCkg(runtime, platform, username, publicJsonLd, privateJsonLd, chatId);
+      const storeResult = await storeProfileInCkg(runtime, platform, username, publicJsonLd, privateJsonLd, chatId, telegramClient);
       
       if (!storeResult) {
         elizaLogger.error("Failed to store profile in MongoDB CKG");
@@ -474,8 +497,8 @@ export const publishAndFindMatch: Action = {
         return false;
       }
 
-      // Only send invitation to first-time users
-      if (isFirstTimeUser) {
+      // Only send invitation to first-time users if the feature is enabled
+      if (isFirstTimeUser && SEND_TELEGRAM_GROUP_INVITES) {
         elizaLogger.info("First-time user detected, sending Telegram group invitation");
         const telegramInviteLink = runtime.getSetting("TELEGRAM_INVITE_LINK");
         callback({
@@ -516,7 +539,7 @@ export const publishAndFindMatch: Action = {
       
       if (!candidates.length) {
         // Only add delay if we sent the invitation
-        if (isFirstTimeUser) {
+        if (isFirstTimeUser && SEND_TELEGRAM_GROUP_INVITES) {
           await new Promise(resolve => setTimeout(resolve, 2000));
         }
         callback({ 
@@ -547,7 +570,7 @@ export const publishAndFindMatch: Action = {
 
       if (!postResult?.length) {
         // Only add delay if we sent the invitation
-        if (isFirstTimeUser) {
+        if (isFirstTimeUser && SEND_TELEGRAM_GROUP_INVITES) {
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
         callback({ text: "I've updated your profile and found some matches, but couldn't generate the introduction. Please try again!" });
@@ -583,7 +606,7 @@ export const publishAndFindMatch: Action = {
       }
       
       // Only add delay if we sent the invitation
-      if (isFirstTimeUser) {
+      if (isFirstTimeUser && SEND_TELEGRAM_GROUP_INVITES) {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
       callback({ text: postMessage });

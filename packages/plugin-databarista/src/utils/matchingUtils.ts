@@ -12,7 +12,7 @@ import {
 import { MongoClient } from 'mongodb';
 import { IDEAL_MATCH_TEMPLATE } from "./promptTemplates";
 import { SHACL_SHAPES } from "./shaclShapes";
-import { DAILY_MATCH_LIMIT } from "./constants";
+import { DAILY_MATCH_LIMIT, DEFAULT_VECTOR_INDEX_NAME, MONGODB_VECTOR_INDEX_ENV_VAR } from "./constants";
 
 /**
  * Interface for profile data returned from MongoDB CKG
@@ -208,7 +208,9 @@ export async function findMatchingProfilesWithAtlasSearch(
     await client.connect();
     
     const db = client.db(dbName);
-    const collection = db.collection(platform);
+    // Check if MONGODB_DATABASE_COLLECTION is set in environment, otherwise use platform
+    const collectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || platform;
+    const collection = db.collection(collectionName);
     
   
     // Get the user's match history to avoid showing the same profiles again
@@ -231,10 +233,18 @@ export async function findMatchingProfilesWithAtlasSearch(
     });
     
     // Use Atlas Vector Search to find the top matches
+    // Try to get vector index name from dedicated environment variable first
+    // If not available, try using MONGODB_DATABASE_COLLECTION
+    // If neither is available, use the default name
+    const vectorIndexName = runtime.getSetting(MONGODB_VECTOR_INDEX_ENV_VAR) || 
+                            runtime.getSetting('MONGODB_DATABASE_COLLECTION') || 
+                            DEFAULT_VECTOR_INDEX_NAME;
+    elizaLogger.info(`Using vector index name: ${vectorIndexName}`);
+    
     const pipeline = [
       {
         $vectorSearch: {
-          index: "vector_index_global",
+          index: vectorIndexName,
           path: "latestProfile.embedding",
           queryVector: idealProfileEmbedding,
           numCandidates: 100,
@@ -365,7 +375,9 @@ export async function checkMatchLimit(
     await client.connect();
     
     const db = client.db(dbName);
-    const collection = db.collection(platform);
+    // Check if MONGODB_DATABASE_COLLECTION is set in environment, otherwise use platform
+    const collectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || platform;
+    const collection = db.collection(collectionName);
     
     // Get the user profile
     const profile = await collection.findOne(
@@ -438,7 +450,9 @@ export async function recordMatchRequest(
     await client.connect();
     
     const db = client.db(dbName);
-    const collection = db.collection(platform);
+    // Check if MONGODB_DATABASE_COLLECTION is set in environment, otherwise use platform
+    const collectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || platform;
+    const collection = db.collection(collectionName);
     
     const now = new Date();
     
@@ -559,7 +573,9 @@ export async function getMatchHistory(
     await client.connect();
     
     const db = client.db(dbName);
-    const collection = db.collection(platform);
+    // Check if MONGODB_DATABASE_COLLECTION is set in environment, otherwise use platform
+    const collectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || platform;
+    const collection = db.collection(collectionName);
     
     const profile = await collection.findOne(
       { platform, username },
@@ -687,7 +703,12 @@ async function getUserProfile(runtime: IAgentRuntime, username: string): Promise
     await client.connect();
     
     const db = client.db(dbName);
-    const collection = db.collection('telegram');
+    // For this specific function, we could either:
+    // 1. Use MONGODB_DATABASE_COLLECTION if set, or
+    // 2. Always use 'telegram' as it's hardcoded in the original code
+    // Let's go with option 1 to be consistent with other functions
+    const collectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || 'telegram';
+    const collection = db.collection(collectionName);
     
     // Look for the user profile
     const profile = await collection.findOne(

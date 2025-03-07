@@ -2,7 +2,7 @@ import type { Plugin } from "@elizaos/core";
 import { noneAction } from "./actions/noneAction";
 import { publishAndFindMatch } from "./actions/publishAndFindMatch";
 import { serendipityAction } from "./actions/serendipityAction";
-//import { simSynteticProfile } from "./actions/simSynteticProfile";
+import { simSynteticProfile } from "./actions/simSynteticProfile";
 import { userProfileProvider } from "./providers/userProfileProvider";
 
 export * as actions from "./actions";
@@ -15,7 +15,8 @@ export const databaristaPlugin: Plugin = {
     actions: [
         publishAndFindMatch,
         noneAction,
-        serendipityAction
+        serendipityAction,
+        simSynteticProfile,
     ],
     evaluators: [],
     providers: [userProfileProvider],
