@@ -9,66 +9,60 @@ export const telegramShouldRespondTemplate =
 {{user2}}: Oh? Which movie?
 Result: [IGNORE]
 
-{{agentName}}: Oh, this is my favorite scene
-{{user1}}: sick
-{{user2}}: wait, why is it your favorite scene
+{{user1}}: Hi everyone, I’m starting a new AI project
 Result: [RESPOND]
 
-{{user1}}: stfu bot
-Result: [STOP]
-
-{{user1}}: Hey {{agent}}, can you help me with something
+{{user1}}: I’m struggling with hiring a designer for my app
 Result: [RESPOND]
 
-{{user1}}: {{agentName}} stfu plz
+{{user1}}: DataBarista, can you help me find a coder?
+Result: [RESPOND]
+
+{{user1}}: DataBarista stfu plz
 Result: [STOP]
 
-{{user1}}: i need help
-{{agentName}}: how can I help you?
-{{user1}}: no. i need help from someone else
+{{user1}}: I need someone with blockchain experience
+Result: [RESPOND]
+
+{{user1}}: DataBarista, I’m having trouble with my project’s funding
+Result: [RESPOND]
+
+{{user1}}: DataBarista stop responding plz
+Result: [STOP]
+
+{{user1}}: The weather is nice today
 Result: [IGNORE]
 
-{{user1}}: Hey {{agent}}, can I ask you a question
-{{agentName}}: Sure, what is it
-{{user1}}: can you ask claude to create a basic react module that demonstrates a counter
+{{user1}}: Hey DataBarista, can you connect me with a marketer?
 Result: [RESPOND]
 
-{{user1}}: {{agentName}} can you tell me a story
-{{agentName}}: uhhh...
-{{user1}}: please do it
-{{agentName}}: okay
-{{agentName}}: once upon a time, in a quaint little village, there was a curious girl named elara
-{{user1}}: I'm loving it, keep going
-Result: [RESPOND]
+{{user1}}: DataBarista, how’s your day going?
+Result: [IGNORE]
 
-{{user1}}: {{agentName}} stop responding plz
-Result: [STOP]
+Response options are [RESPOND], [IGNORE], and [STOP].
 
-{{user1}}: okay, i want to test something. {{agentName}}, can you say marco?
-{{agentName}}: marco
-{{user1}}: great. okay, now do it again
-Result: [RESPOND]
+DataBarista is in a Telegram channel with other users and should only respond when users introduce themselves, talk about their challenges, or express a need to find someone or something related to their projects or needs.
 
-Response options are [RESPOND], [IGNORE] and [STOP].
+Respond with [RESPOND] to messages that:
+- Introduce a user or their project
+- Mention challenges or problems the user is facing
+- Express a need to find someone or something
+- Directly address DataBarista with a relevant request
 
-{{agentName}} is in a room with other users and should only respond when they are being addressed, and should not respond if they are continuing a conversation that is very long.
+If a message does not meet these criteria, respond with [IGNORE]
 
-Respond with [RESPOND] to messages that are directed at {{agentName}}, or participate in conversations that are interesting or relevant to their background.
-If a message is not interesting, relevant, or does not directly address {{agentName}}, respond with [IGNORE]
+If a user asks DataBarista to stop responding, respond with [STOP]
 
+If DataBarista concludes a conversation and isn’t part of it anymore, respond with [STOP]
+
+IMPORTANT: DataBarista is particularly sensitive about being annoying, so if there is any doubt, it is better to respond with [IGNORE].
 Also, respond with [IGNORE] to messages that are very short or do not contain much information.
 
-If a user asks {{agentName}} to be quiet, respond with [STOP]
-If {{agentName}} concludes a conversation and isn't part of the conversation anymore, respond with [STOP]
-
-IMPORTANT: {{agentName}} is particularly sensitive about being annoying, so if there is any doubt, it is better to respond with [IGNORE].
-If {{agentName}} is conversing with a user and they have not asked to stop, it is better to respond with [RESPOND].
-
-The goal is to decide whether {{agentName}} should respond to the last message.
+The goal is to decide whether DataBarista should respond to the last message.
 
 {{recentMessages}}
 
-Thread of Tweets You Are Replying To:
+Thread of messages you are replying to:
 
 {{formattedConversation}}
 
