@@ -1,6 +1,7 @@
 import { Provider, IAgentRuntime, Memory, State, elizaLogger } from "@elizaos/core";
 // @ts-ignore
 import { getProfile } from "../utils/profileUtils";
+import { MongoClient } from 'mongodb';
 
 /**
  * Helper function to remove embeddings from user profile data
@@ -22,6 +23,119 @@ function stripEmbeddings(userData: any[]): any[] {
         
         return cleanProfile;
     });
+}
+
+/**
+ * Creates an initial minimal profile for a new user
+ * @param runtime Agent runtime
+ * @param platform Platform name (e.g., telegram)
+ * @param username Username
+ * @param telegramChatId Telegram chat ID if available
+ * @param state Current state
+ * @returns Boolean indicating success
+ */
+async function createInitialUserProfile(
+  runtime: IAgentRuntime,
+  platform: string,
+  username: string,
+  telegramChatId?: string,
+  state?: State
+): Promise<boolean> {
+  try {
+    // Get agent details from runtime
+    const agentId = runtime.agentId;
+    
+    // Get the bot username from runtime or client
+    let agentUsername = runtime.character?.username || runtime.character?.name;
+    
+    // Try to get the actual bot username from Telegram client if available
+    const telegramClient = runtime.clients['telegram'] as any;
+    if (telegramClient?.bot?.botInfo?.username) {
+      agentUsername = telegramClient.bot.botInfo.username.replace(/^@/, '');
+      elizaLogger.info(`Using actual bot username for profile: ${agentUsername}`);
+    }
+    
+    // Get community info - defaults to agent username if not available
+    const community = state?.community || agentUsername;
+    
+    // Create an empty profile with minimal data
+    const currentProfileData = {
+      public: {
+        "@context": {
+          "schema": "http://schema.org/",
+          "datalatte": "https://datalatte.com/ns/"
+        },
+        "datalatte:initialProfile": true, // Mark as initial profile
+        "datalatte:revisionTimestamp": new Date().toISOString()
+      },
+      private: {
+        "@context": {
+          "schema": "http://schema.org/",
+          "datalatte": "https://datalatte.com/ns/",
+          "foaf": "http://xmlns.com/foaf/0.1/"
+        },
+        "foaf:account": {
+          "@type": "foaf:OnlineAccount",
+          "foaf:accountServiceHomepage": platform,
+          "foaf:accountName": username
+        },
+        "datalatte:revisionTimestamp": new Date().toISOString()
+      },
+      timestamp: new Date()
+    };
+    
+    // Store the profile data using MongoDB
+    const client = await new MongoClient(runtime.getSetting('MONGODB_CONNECTION_STRING_CKG')).connect();
+    const db = client.db(runtime.getSetting('MONGODB_DATABASE_CKG'));
+    
+    // Check if MONGODB_DATABASE_COLLECTION is set in environment, otherwise use platform
+    const collectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || platform;
+    const collection = db.collection(collectionName);
+    
+    // Find existing document for this user
+    const existingDoc = await collection.findOne({ platform, username });
+    
+    // Only create a new profile if none exists
+    if (!existingDoc) {
+      // Create a new profile document with initial data
+      const profileDocument: any = {
+        platform,
+        username,
+        latestProfile: currentProfileData,
+        profileVersions: [currentProfileData],
+        created: new Date(),
+        lastUpdated: new Date(),
+        agentId,
+        agentUsername,
+        community
+      };
+
+      // Add telegramChatId if provided
+      if (telegramChatId) {
+        profileDocument.telegramChatId = telegramChatId;
+      }
+      
+      await collection.insertOne(profileDocument);
+      
+      elizaLogger.info(`Created initial profile for ${username} on ${platform}`);
+      return true;
+    }
+    
+    // Profile already exists
+    elizaLogger.info(`Profile already exists for ${username} on ${platform}, skipping creation`);
+    return false;
+  } catch (error) {
+    elizaLogger.error(`Error creating initial profile for ${username} on ${platform}: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  } finally {
+    // Ensure the MongoDB client is closed
+    try {
+      const client = await MongoClient.connect(runtime.getSetting('MONGODB_CONNECTION_STRING_CKG'));
+      await client.close();
+    } catch (error) {
+      // Ignore errors when closing the client
+    }
+  }
 }
 
 //TODO; currently sparql query is only getting latest intent ids, but later should get all unique ids and their latest revision timestamp
@@ -46,9 +160,40 @@ const userProfileProvider: Provider = {
             // Get profile using the profileUtils.getProfile function
             let userData = await getProfile(runtime, platform, username);
 
-            // If no data found
+            // If no data found, create an initial profile
             if (!userData || userData.length === 0) {
-                return `No profile information found yet for @${username} on ${platform}. Converse with the user to get more information to build a better profile.`;
+                elizaLogger.info(`No profile found for ${username} on ${platform}, creating initial profile`);
+                
+                // Get Telegram chat ID if available
+                let telegramChatId: string | undefined;
+                
+                // Attempt to get Telegram chat ID from message or state
+                if (platform === 'telegram') {
+                    const telegramClient = runtime.clients['telegram'] as any;
+                    
+                    // Try to get from message or content properties
+                    const messageAny = message as any;
+                    if (messageAny.content?.chatId) {
+                        telegramChatId = messageAny.content.chatId;
+                    } 
+                    // Try to get from Telegram's message manager
+                    else if (telegramClient?.messageManager?.getUserChatId) {
+                        telegramChatId = telegramClient.messageManager.getUserChatId(username);
+                    }
+                }
+                
+                // Create initial profile
+                const created = await createInitialUserProfile(runtime, platform, username, telegramChatId, state);
+                
+                if (created) {
+                    // Get the freshly created profile
+                    userData = await getProfile(runtime, platform, username);
+                } 
+                
+                // Still no profile data (creation might have failed)
+                if (!userData || userData.length === 0) {
+                    return `No profile information found yet for @${username} on ${platform}. Converse with the user to get more information to build a better profile.`;
+                }
             }
 
             // Strip embeddings from the profile data before formatting as JSON-LD
