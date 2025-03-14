@@ -11,12 +11,14 @@ import {
 import { MongoClient } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 
-// Define interface for profile version data
-interface ProfileVersionData {
-  public: any;
-  private: any;
+// Update the ProfileVersionData interface to match our new format
+interface ProfileData {
+  private: string;
+  public: string;
+  ideal: string;
   timestamp: Date;
   embedding?: number[];
+  ideal_embedding?: number[];
 }
 
 // Define synthetic profiles directly in this file
@@ -1087,51 +1089,94 @@ const syntheticProfiles = [
  * Generate embeddings for profile data using ElizaOS Core's embedding service
  * @param runtime Agent runtime for embedding service 
  * @param profileData Profile data to generate embeddings for
- * @returns Embedding vector as number array
+ * @returns Object containing profile and ideal embeddings
  */
-async function generateProfileEmbedding(
+async function generateProfileEmbeddings(
   runtime: IAgentRuntime,
-  profileData: any
-): Promise<number[] | null> {
+  profileData: {
+    private: string;
+    public: string;
+    ideal: string;
+  }
+): Promise<{
+  embedding: number[];
+  ideal_embedding: number[];
+} | null> {
   try {
-    // Extract key fields from profile data to create a text representation
-    const publicData = profileData.public || {};
-    const privateData = profileData.private || {};
+    // Generate embeddings in parallel for faster execution
+    const [profileEmbedding, idealEmbedding] = await Promise.all([
+      embed(runtime, `${profileData.private} ${profileData.public}`),
+      embed(runtime, profileData.ideal)
+    ]);
     
-    // Combine the most important semantic fields for embedding
-    const textToEmbed = [
-      publicData["datalatte:summary"] || "",
-      publicData["datalatte:intentCategory"] || "",
-      publicData["datalatte:projectDescription"] || "",
-      privateData["datalatte:background"] || "",
-      privateData["datalatte:knowledgeDomain"] || "",
-      privateData?.["datalatte:hasProject"]?.["datalatte:projectDomain"] || "",
-      privateData?.["datalatte:hasProject"]?.["schema:description"] || "",
-      // Join desired connections if it's an array
-      Array.isArray(publicData["datalatte:desiredConnections"]) 
-        ? publicData["datalatte:desiredConnections"].join(" ") 
-        : (publicData["datalatte:desiredConnections"] || "")
-    ].filter(Boolean).join(" ");
-    
-    if (!textToEmbed.trim()) {
-      elizaLogger.warn("No meaningful text found to embed for profile");
+    if (!profileEmbedding || !idealEmbedding) {
+      elizaLogger.error("Failed to generate embeddings for profile");
       return null;
     }
     
-    elizaLogger.info("Generated text for embedding:", textToEmbed.substring(0, 100) + "...");
+    elizaLogger.info(`Generated profile embedding with ${profileEmbedding.length} dimensions`);
+    elizaLogger.info(`Generated ideal embedding with ${idealEmbedding.length} dimensions`);
     
-    // Use ElizaOS Core embedding service
-    const embedding = await embed(runtime, textToEmbed);
-    if (embedding.length > 0) {
-      elizaLogger.info(`Generated embedding vector with ${embedding.length} dimensions`);
-      return embedding;
-    } else {
-      elizaLogger.warn("Embedding generation returned empty vector");
-      return null;
-    }
+    return {
+      embedding: profileEmbedding,
+      ideal_embedding: idealEmbedding
+    };
   } catch (error) {
-    elizaLogger.error("Error generating profile embedding:", error);
+    elizaLogger.error("Error generating profile embeddings:", error);
     return null;
+  }
+}
+
+/**
+ * Convert legacy format profile to new text-based format
+ */
+function convertToTextProfile(profile: any): {
+  private: string;
+  public: string;
+  ideal: string;
+} {
+  try {
+    // Extract data from legacy format
+    const publicData = profile.public || {};
+    const privateData = profile.private || {};
+    
+    // Create private section
+    const privateText = [
+      `Professional Background: ${privateData["foaf:name"] || "Anonymous"} is ${privateData["datalatte:background"] || "a professional"}.`,
+      `Area of Expertise: Specialized in ${privateData["datalatte:knowledgeDomain"] || "various domains"}.`,
+      `Experience: ${privateData["datalatte:privateDetails"] || "Has experience in the field"}.`,
+    ].join("\n\n");
+    
+    // Create public section
+    const publicText = [
+      `Summary: ${publicData["datalatte:summary"] || "Looking for connections"}.`,
+      `Project: ${publicData["datalatte:projectDescription"] || "Working on various projects"}.`,
+      `Current Challenge: ${publicData["datalatte:challenge"] || "Facing typical challenges in the domain"}.`,
+      `Project Details: ${publicData["datalatte:relatedTo"]?.["foaf:name"] || "Unnamed project"} - ${publicData["datalatte:relatedTo"]?.["schema:description"] || "A project in development"}.`,
+      `Technology: Using ${publicData["datalatte:relatedTo"]?.["datalatte:techStack"] || "various technologies"}.`,
+    ].join("\n\n");
+    
+    // Create ideal section
+    const idealText = [
+      `Looking to connect with: ${publicData["datalatte:desiredConnections"] || "Like-minded professionals"}.`,
+      `Ideal Match: Someone with expertise in ${privateData["datalatte:knowledgeDomain"] || "relevant fields"} who can help with ${publicData["datalatte:challenge"] || "current challenges"}.`,
+      `Project Domain: The ideal match would have experience in ${publicData["datalatte:relatedTo"]?.["datalatte:projectDomain"] || "relevant domains"}.`,
+      `Match Qualities: A professional with background in ${publicData["datalatte:relatedTo"]?.["datalatte:type"] || "industry"} who can provide insights and collaboration opportunities.`,
+    ].join("\n\n");
+    
+    return {
+      private: privateText,
+      public: publicText,
+      ideal: idealText
+    };
+  } catch (error) {
+    elizaLogger.error("Error converting to text profile:", error);
+    // Return basic structure if conversion fails
+    return {
+      private: "Professional with experience in the field.",
+      public: "Looking for connections in related domains.",
+      ideal: "Seeking professionals with relevant expertise."
+    };
   }
 }
 
@@ -1145,147 +1190,87 @@ async function publishSyntheticProfile(
   try {
     elizaLogger.info(`Publishing ${profileName} to MongoDB CKG (Attempt ${attempt}/3)...`);
     
-    // Generate IDs that will be used across both public and private parts
-    const personId = `urn:uuid:${uuidv4()}`;
-    const intentId = `urn:intent:int_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const projectId = `urn:project:int_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const timestamp = new Date().toISOString();
+    // Extract username from the profile
     const username = profile.private.foaf?.account?.foaf?.accountName || 
                      profile.private?.["foaf:account"]?.["foaf:accountName"] || 
                      `synthetic_user_${Math.random().toString(36).substr(2, 9)}`;
 
-    // Construct public part
-    const publicData = {
-      "@context": profile.public["@context"],
-      "@type": "datalatte:Intent",
-      "@id": intentId,
-      "datalatte:revisionTimestamp": timestamp,
-      "datalatte:summary": profile.public["datalatte:summary"],
-      "datalatte:projectDescription": profile.public["datalatte:projectDescription"],
-      "datalatte:challenge": profile.public["datalatte:challenge"],
-      "datalatte:desiredConnections": profile.public["datalatte:desiredConnections"],
-      "datalatte:intentCategory": "professional",
-      "schema:url": profile.public["schema:url"],
-      "datalatte:relatedTo": {
-        "@type": "datalatte:Project",
-        "@id": projectId,
-        "datalatte:revisionTimestamp": timestamp,
-        "foaf:name": profile.public["datalatte:relatedTo"]["foaf:name"],
-        "schema:description": profile.public["datalatte:relatedTo"]["schema:description"],
-        "datalatte:type": profile.public["datalatte:relatedTo"]["datalatte:type"],
-        "datalatte:projectDomain": profile.public["datalatte:relatedTo"]["datalatte:projectDomain"],
-        "datalatte:techStack": profile.public["datalatte:relatedTo"]["datalatte:techStack"]
-      }
-    };
-
-    // Construct private part
-    const privateData = {
-      "@context": profile.private["@context"],
-      "@type": "foaf:Person",
-      "@id": personId,
-      "datalatte:revisionTimestamp": timestamp,
-      "foaf:name": profile.private["foaf:name"],
-      "datalatte:background": profile.private["datalatte:background"],
-      "datalatte:knowledgeDomain": profile.private["datalatte:knowledgeDomain"],
-      "datalatte:privateDetails": profile.private["datalatte:privateDetails"],
-      "datalatte:hasAccount": {
-        "@type": "datalatte:Account",
-        "datalatte:accountPlatform": platform,
-        "datalatte:accountUsername": username
-      },
-      "datalatte:hasIntent": {
-        "@type": "datalatte:Intent",
-        "@id": intentId
-      },
-      "datalatte:hasProject": {
-        "@type": "datalatte:Project",
-        "@id": projectId
-      }
-    };
-
     elizaLogger.info("Publishing profile data for:", { platform, username });
 
-    // Prepare current profile data version
-    const currentProfileData: ProfileVersionData = {
-        public: publicData,
-        private: privateData,
+    // Convert legacy format to new text-based format
+    const textProfile = convertToTextProfile(profile);
+    
+    // Prepare current profile data
+    const profileData: ProfileData = {
+      private: textProfile.private,
+      public: textProfile.public,
+      ideal: textProfile.ideal,
       timestamp: new Date()
     };
     
-    // Generate embedding for the profile data
-    elizaLogger.info("Generating embedding for profile data");
-    const embedding = await generateProfileEmbedding(runtime, currentProfileData);
+    // Generate embeddings for the profile
+    elizaLogger.info("Generating embeddings for profile");
+    const embeddings = await generateProfileEmbeddings(runtime, profileData);
     
-    // Add embedding to profile data if available
-    if (embedding) {
-      currentProfileData.embedding = embedding;
-      elizaLogger.info(`Added embedding vector with ${embedding.length} dimensions to profile`);
+    // Add embeddings to profile data if available
+    if (embeddings) {
+      profileData.embedding = embeddings.embedding;
+      profileData.ideal_embedding = embeddings.ideal_embedding;
+      elizaLogger.info(`Added profile embedding (${embeddings.embedding.length} dimensions) and ideal embedding (${embeddings.ideal_embedding.length} dimensions)`);
+    } else {
+      elizaLogger.warn("Failed to generate embeddings for profile");
     }
     
-    // Store the profile data using MongoDB
+    // Get MongoDB connection info
     const connectionString = runtime.getSetting('MONGODB_CONNECTION_STRING_CKG');
     const dbName = runtime.getSetting('MONGODB_DATABASE_CKG');
-    
-    if (!connectionString) {
-      throw new Error('MONGODB_CONNECTION_STRING_CKG not set in environment');
-    }
-    
-    if (!dbName) {
-      throw new Error('MONGODB_DATABASE_CKG not set in environment');
-    }
-    
-    const client = await new MongoClient(connectionString).connect();
-    const db = client.db(dbName);
-    // Check if MONGODB_DATABASE_COLLECTION is set in environment, otherwise use platform
     const collectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || platform;
+    
+    // Validate connection info
+    if (!connectionString || !dbName) {
+      elizaLogger.error('Missing MongoDB connection settings');
+      throw new Error('MongoDB connection settings missing');
+    }
+    
+    // Connect to MongoDB
+    const client = await MongoClient.connect(connectionString);
+    const db = client.db(dbName);
     const collection = db.collection(collectionName);
     
-    // Find existing document for this user
-    const existingDoc = await collection.findOne({ platform, username });
+    // Find existing document
+    const existingProfile = await collection.findOne({ platform, username });
     
     let result;
     
-    if (existingDoc) {
-      // Document exists, append new profile version to the profileVersions array
-      // and update latestProfile for search purposes
-      elizaLogger.info("Updating existing profile document with new version", {
-        platform,
-        username
-      });
-      
-      // Get existing profileVersions array or initialize if it doesn't exist
-      const existingVersions = existingDoc.profileVersions || [];
-      
-      // Create a new array with existing versions plus the new one
-      const updatedVersions = [...existingVersions, currentProfileData];
+    if (existingProfile) {
+      // Existing user - update profile and add to version history
+      elizaLogger.info("Updating existing profile document with new version");
       
       result = await collection.updateOne(
         { platform, username },
-        { 
-          $set: { 
-            latestProfile: currentProfileData,
-            profileVersions: updatedVersions,
+        {
+          $set: {
+            latestProfile: profileData,
             lastUpdated: new Date()
+          },
+          $addToSet: {
+            profileVersions: profileData
           }
         }
       );
     } else {
-      // Document doesn't exist, create new one with initial version
-      elizaLogger.info("Creating new profile document", {
-        platform,
-        username
-      });
+      // New user - create profile
+      elizaLogger.info("Creating new profile document");
       
-      const profileDocument = {
+      result = await collection.insertOne({
         platform,
         username,
-        latestProfile: currentProfileData,
-        profileVersions: [currentProfileData],
+        latestProfile: profileData,
+        profileVersions: [profileData],
         created: new Date(),
-        lastUpdated: new Date()
-      };
-      
-      result = await collection.insertOne(profileDocument);
+        lastUpdated: new Date(),
+        community: runtime.character?.username || runtime.character?.name || "databarista"
+      });
     }
     
     await client.close();
@@ -1294,19 +1279,21 @@ async function publishSyntheticProfile(
     elizaLogger.info({
       updated: result.modifiedCount > 0,
       inserted: result.insertedCount > 0,
-      versionCount: (existingDoc?.profileVersions?.length || 0) + 1,
-      hasEmbedding: !!embedding,
-      platform,
       username
     });
-    elizaLogger.info("==========================================");
     
     return true;
-
   } catch (error) {
-    elizaLogger.error(`Error publishing ${profileName} (Attempt ${attempt}/3):`);
-    elizaLogger.error('Error message:', error.message);
-    elizaLogger.error('Error stack:', error.stack);
+    elizaLogger.error(`Error publishing synthetic profile (attempt ${attempt}/3):`, error);
+    
+    // Retry up to 3 times with exponential backoff
+    if (attempt < 3) {
+      const backoffMs = attempt * 1000; // 1s, 2s, 3s
+      elizaLogger.info(`Retrying in ${backoffMs}ms...`);
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
+      return publishSyntheticProfile(runtime, profile, profileName, platform, attempt + 1);
+    }
+    
     return false;
   }
 }

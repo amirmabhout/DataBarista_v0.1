@@ -234,4 +234,86 @@ Format response as array:
 - If nothing new is found or conversation does not reveal any information that can be extracted in this template, return []
 - If updating existing intent or project, use that intention's ID instead of {{intentid}} as well as existing project's ID instead of {{projectid}}
 - Exclude any field from the output if not found in conversation
+`;
+
+/**
+ * Combined template for generating all three profile components: private, public, and ideal match
+ * This template creates more semantically rich text profiles for better vector search
+ */
+export const COMBINED_PROFILE_TEMPLATE = `
+TASK: Convert conversation history into semantically rich text-based profile sections
+
+Recent Messages:
+{{recentMessages}}
+
+Existing knowledge related to the person:
+{{userProfileData}}
+username: {{username}}
+platform: {{platform}}
+
+
+Guidelines:
+1. First analyze if the intent from conversation matches or updates any existing information
+   - If exact match exists (same core intention, no new details) -> enhance existing data but maintain the core meaning
+   - If there are new relevant details -> incorporate them in all appropriate sections
+2. Create three distinct text sections, each focused on a specific aspect of the profile:
+
+a) PRIVATE SECTION:
+Create a comprehensive text (200-350 words) about the user's background, expertise, and personal context.
+This section should cover:
+- Professional background and career history
+- Education and training
+- Skills and expertise areas
+- Technical capabilities and domain knowledge
+- Notable achievements
+- Personal context relevant to their professional life
+- Experiences and lessons learned
+- Strengths and capabilities
+
+b) PUBLIC SECTION:
+Create a detailed text (200-350 words) about the user's networking goals and preferences.
+This section should cover:
+- Current professional goals and intentions
+- Projects they're working on or planning
+- Challenges they're facing
+- Type of help or collaboration they're seeking
+- Specific preferences for networking connections
+- How they prefer to collaborate
+- What they hope to achieve through networking
+- Value they offer to potential connections
+
+c) IDEAL MATCH SECTION:
+Create a detailed text (300-450 words) describing the ideal match for this user.
+This section should cover TWO key aspects:
+1. The background, expertise, and capabilities of their ideal match:
+   - Professional background and expertise level
+   - Knowledge domains and specializations
+   - Skills and technical capabilities
+   - Experience types and industry background
+   - Perspective and approach to work
+
+2. The goals and preferences of the ideal match that would complement the user:
+   - Professional goals that align with the user's needs
+   - Project interests that overlap with the user's domain
+   - Collaborative style that works well with the user
+   - Values and priorities that complement the user's approach
+   - What they might be looking for that the user can provide
+
+FORMAT RESPONSE AS ARRAY:
+[
+  {
+    "analysis": {
+      "matchType": "exact_match" | "update_existing" | "new_information",
+      "reason": "<explanation of the decision>"
+    },
+    "private": "An engineer focused on developing ...",
+    "public": "Primary goal is to connect with community builders....",
+    "ideal": "A community builder with a strong background ..... and has primary goal ....."
+  }
+]
+
+Make all three sections semantically rich with domain-specific terminology and details, as they will be used for vector similarity search.
+Each section should read as a coherent, standalone text that thoroughly explores its focus area.
+Do not include formatting like bullet points or section headers - use natural paragraphs.
+If there isn't enough information in the conversation for any section, create the best possible representation based on available context.
 `; 

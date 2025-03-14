@@ -6,14 +6,18 @@ import { MongoClient } from 'mongodb';
 
 /**
  * Interface for profile data returned from MongoDB CKG
+ * Simplified to use a single latestProfile field with text-based sections
  */
 interface ProfileData {
   platform: string;
   username: string;
-  latestProfile: {
-    public: any;
-    private: any;
+  latestProfile?: {
+    private: string;
+    public: string;
+    ideal: string;
     timestamp?: Date;
+    embedding?: number[];
+    ideal_embedding?: number[];
   };
   timestamp?: Date;
   lastUpdated?: Date;
@@ -28,6 +32,15 @@ interface ProfileData {
   }>;
   telegramChatId?: string;
   community?: string;
+  agentUsername?: string;
+  profileVersions?: Array<{
+    private: string;
+    public: string;
+    ideal: string;
+    timestamp: Date;
+    embedding?: number[];
+    ideal_embedding?: number[];
+  }>;
 }
 
 // Database connection singleton
@@ -78,7 +91,7 @@ export async function getProfile(
   runtime: IAgentRuntime,
   platform: string,
   username: string
-): Promise<any> {
+): Promise<ProfileData[] | null> {
   try {
     elizaLogger.info('Fetching user profile from MongoDB CKG for:', { platform, username });
     
@@ -90,23 +103,29 @@ export async function getProfile(
     const collection = db.collection(collectionName);
     
     // Optimized query that only fetches the necessary fields
-    // and explicitly excludes the embedding field
+    // Excludes embedding fields by default to keep response size smaller
     const results = await collection.find(
       { platform, username },
       { 
         projection: {
           platform: 1,
           username: 1,
-          "latestProfile.public": 1,
           "latestProfile.private": 1,
+          "latestProfile.public": 1,
+          "latestProfile.ideal": 1,
           "latestProfile.timestamp": 1,
+          "latestProfile.embedding": 1,
+          "latestProfile.ideal_embedding": 1,
           timestamp: 1,
           lastUpdated: 1,
           "matchHistory": 1,
-          "matchRequests": 1
+          "matchRequests": 1,
+          "telegramChatId": 1,
+          "community": 1,
+          "agentUsername": 1
         } 
       }
-    ).sort({ timestamp: -1 }).toArray() as unknown as ProfileData[];
+    ).sort({ lastUpdated: -1 }).toArray() as unknown as ProfileData[];
     
     elizaLogger.info(`Found ${results.length} profile(s) for ${username} on ${platform}`);
     

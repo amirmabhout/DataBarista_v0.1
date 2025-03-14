@@ -9,265 +9,248 @@ import {
   type Action,
   composeContext,
   generateObjectArray,
+  embed
 } from "@elizaos/core";
 import { MongoClient } from 'mongodb';
-import { MATCH_PROMPT_TEMPLATE, KG_EXTRACTION_TEMPLATE} from "../utils/promptTemplates";
-import { SHACL_SHAPES } from "../utils/shaclShapes";
+import { MATCH_PROMPT_TEMPLATE, COMBINED_PROFILE_TEMPLATE } from "../utils/promptTemplates";
 import { getProfile } from "../utils/profileUtils";
 import { 
-  generateIdealMatchProfile, 
-  generateProfileEmbedding, 
+  generateCombinedProfile,
   findMatchingProfilesWithAtlasSearch,
   notifyMatchedUser,
   checkMatchLimit,
   recordMatchRequest,
   recordMatches
 } from "../utils/matchingUtils";
-import { DAILY_MATCH_LIMIT, SEND_TELEGRAM_GROUP_INVITES, MONGODB_VECTOR_INDEX_ENV_VAR } from "../utils/constants";
+import { DAILY_MATCH_LIMIT, SEND_TELEGRAM_GROUP_INVITES } from "../utils/constants";
 
-
-// Define interface for profile version data
-interface ProfileVersionData {
-  public: any;
-  private: any;
+/**
+ * Profile data interface - streamlined for efficiency
+ */
+interface ProfileData {
+  private: string;
+  public: string;
+  ideal: string;
   timestamp: Date;
   embedding?: number[];
+  ideal_embedding?: number[];
 }
 
-async function storeProfileInCkg(
+/**
+ * Generate embeddings for profile data directly
+ * This replaces the previous generateCombinedProfileEmbeddings function for faster execution
+ */
+async function generateProfileEmbeddings(
   runtime: IAgentRuntime,
-  platform: string,
-  username: string,
-  publicJsonLd: any,
-  privateJsonLd: any,
-  chatId?: string,
-  telegramClient?: any
-): Promise<boolean> {
+  profileData: {
+    private: string;
+    public: string;
+    ideal: string;
+  }
+): Promise<{
+  embedding: number[];
+  ideal_embedding: number[];
+} | null> {
   try {
-    // Get agent details from runtime
-    const agentId = runtime.agentId;
+    // Generate embeddings in parallel for faster execution
+    const [profileEmbedding, idealEmbedding] = await Promise.all([
+      embed(runtime, `${profileData.private} ${profileData.public}`),
+      embed(runtime, profileData.ideal)
+    ]);
     
-    // Get the true bot username from the Telegram client if available
-    let agentUsername = runtime.character?.username || runtime.character?.name;
-    
-    // If telegramClient was explicitly passed and has bot info, use its username
-    if (telegramClient?.bot?.botInfo?.username) {
-      // Remove @ prefix if present
-      agentUsername = telegramClient.bot.botInfo.username.replace(/^@/, '');
-      elizaLogger.info(`Using actual bot username for profile: ${agentUsername}`);
-    } else {
-      // Fallback to trying to get the client from runtime if not passed directly
-      const runtimeTelegramClient = runtime.clients['telegram'] as any;
-      if (runtimeTelegramClient?.bot?.botInfo?.username) {
-        agentUsername = runtimeTelegramClient.bot.botInfo.username.replace(/^@/, '');
-        elizaLogger.info(`Using actual bot username from runtime for profile: ${agentUsername}`);
-      } else {
-        elizaLogger.warn(`Could not get bot username from any Telegram client, using fallback: ${agentUsername}`);
-      }
+    if (!profileEmbedding || !idealEmbedding) {
+      elizaLogger.error("Failed to generate embeddings for profile");
+      return null;
     }
     
-    // Prepare current profile data version
-    const currentProfileData: ProfileVersionData = {
-        public: publicJsonLd,
-        private: privateJsonLd,
-      timestamp: new Date()
+    return {
+      embedding: profileEmbedding,
+      ideal_embedding: idealEmbedding
     };
-    
-    // Generate embedding for the profile data
-    const embedding = await generateProfileEmbedding(runtime, currentProfileData);
-    
-    // Add embedding to profile data if available
-    if (embedding) {
-      currentProfileData.embedding = embedding;
-    }
-    
-    // Store the profile data using MongoDB
-    const client = await new MongoClient(runtime.getSetting('MONGODB_CONNECTION_STRING_CKG')).connect();
-    const db = client.db(runtime.getSetting('MONGODB_DATABASE_CKG'));
-    // Check if MONGODB_DATABASE_COLLECTION is set in environment, otherwise use platform
-    const collectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || platform;
-    const collection = db.collection(collectionName);
-    
-    // Find existing document for this user
-    const existingDoc = await collection.findOne({ platform, username });
-    
-    let result;
-    
-    if (existingDoc) {
-      // Document exists, append new profile version to the profileVersions array
-      // and update latestProfile for search purposes
-      
-      // Get existing profileVersions array or initialize if it doesn't exist
-      const existingVersions = existingDoc.profileVersions || [];
-      
-      // Create a new array with existing versions plus the new one
-      const updatedVersions = [...existingVersions, currentProfileData];
-      
-      const updateFields: any = { 
-        latestProfile: currentProfileData,
-        profileVersions: updatedVersions,
-        lastUpdated: new Date(),
-        agentId, // Add agent ID
-        agentUsername // Add agent username
-      };
-
-      // Add chatId if provided
-      if (chatId) {
-        updateFields.telegramChatId = chatId;
-      }
-      
-      result = await collection.updateOne(
-        { platform, username },
-        { $set: updateFields }
-      );
-    } else {
-      // Document doesn't exist, create new one with initial version
-      
-      const profileDocument: any = {
-        platform,
-        username,
-        latestProfile: currentProfileData,
-        profileVersions: [currentProfileData],
-        created: new Date(),
-        lastUpdated: new Date(),
-        agentId, // Add agent ID
-        agentUsername, // Add agent username
-        community: agentUsername // Set community field to current agent username on first profile creation
-      };
-
-      // Add chatId if provided
-      if (chatId) {
-        profileDocument.telegramChatId = chatId;
-      }
-      
-      result = await collection.insertOne(profileDocument);
-    }
-    
-    // Get the updated document to confirm insertion
-    const updatedDoc = await collection.findOne({ platform, username });
-    
-    await client.close();
-    return true;
   } catch (error) {
-    elizaLogger.error("Error storing profile in MongoDB CKG:", error);
-    return false;
+    elizaLogger.error("Error generating profile embeddings:", error);
+    return null;
   }
 }
 
-// Get matches for a user from mongo
-async function getMatches(
+/**
+ * Store profile data in MongoDB
+ * Returns embeddings on success for reuse
+ */
+async function storeProfile(
   runtime: IAgentRuntime,
-  profileData: any,
-  username: string,
   platform: string,
-  state: State
-): Promise<any> {
-  try {
-    // First check if the user has reached their match limit
-    const matchLimit = await checkMatchLimit(runtime, platform, username);
-    
-    if (matchLimit.isLimited) {
-      elizaLogger.info(`User has reached the daily match limit of ${DAILY_MATCH_LIMIT} matches.`);
-      return {
-        matches: [],
-        limitReached: true,
-        remainingCount: matchLimit.remaining,
-        resetTime: matchLimit.resetTime
-      };
-    }
-    
-    // Get the profile data for the ideal match
-    const idealMatchProfile = await generateIdealMatchProfile(runtime, profileData, state);
-
-    if (!idealMatchProfile) {
-      elizaLogger.error(`Failed to generate ideal match profile`);
-      return { matches: [] };
-    }
-    elizaLogger.info(`Generated ideal match profile for ${username} on ${platform}`);
-
-    // Generate an embedding for the ideal match profile
-    const idealMatchEmbedding = await generateProfileEmbedding(runtime, { ideal_match_description: idealMatchProfile });
-
-    if (!idealMatchEmbedding || idealMatchEmbedding.length === 0) {
-      elizaLogger.error(`Failed to generate embedding for ideal match profile`);
-      return { matches: [] };
-    }
-    elizaLogger.info(`Generated embedding for ideal match profile with length ${idealMatchEmbedding.length}`);
-
-    // Find matches using Atlas Search with the ideal profile embedding
-    const candidates = await findMatchingProfilesWithAtlasSearch(runtime, idealMatchEmbedding, platform, username, state);
-
-    if (!candidates.length) {
-      elizaLogger.info(`Did not find any matching profiles for ${username} on ${platform}`);
-      return { matches: [] };
-    }
-    
-    // Record the match request to track rate limiting
-    await recordMatchRequest(runtime, platform, username);
-    
-    elizaLogger.info(`Found ${candidates.length} matching profiles for ${username} on ${platform}`);
-    
-    return {
-      matches: candidates,
-      limitReached: false,
-      remainingCount: matchLimit.remaining - 1,
-      resetTime: matchLimit.resetTime
+  username: string,
+  profile: {
+    private: string;
+    public: string;
+    ideal: string;
+    analysis: {
+      matchType: 'exact_match' | 'update_existing' | 'new_information';
+      reason: string;
     };
+  }
+): Promise<{
+  embedding: number[];
+  ideal_embedding: number[];
+} | null> {
+  try {
+    // Get MongoDB connection info
+    const connectionString = runtime.getSetting('MONGODB_CONNECTION_STRING_CKG');
+    const dbName = runtime.getSetting('MONGODB_DATABASE_CKG');
+    const collectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || platform;
+    
+    // Validate connection info
+    if (!connectionString || !dbName) {
+      elizaLogger.error('Missing MongoDB connection settings');
+      return null;
+    }
+    
+    // Get agent details from runtime
+    const agentId = runtime.agentId;
+    let agentUsername = runtime.character?.username || runtime.character?.name;
+    
+    // Try to get the actual bot username from Telegram client if available
+    const telegramClient = runtime.clients['telegram'] as any;
+    if (telegramClient?.bot?.botInfo?.username) {
+      agentUsername = telegramClient.bot.botInfo.username.replace(/^@/, '');
+    }
+    
+    // Get chat ID if available
+    let chatId: string | undefined;
+    if (telegramClient?.messageManager?.getUserChatId) {
+      chatId = telegramClient.messageManager.getUserChatId(username);
+    }
+    
+    // Generate embeddings for the profile
+    const embeddings = await generateProfileEmbeddings(runtime, profile);
+    if (!embeddings) {
+      elizaLogger.error("Failed to generate embeddings for profile");
+      return null;
+    }
+    
+    // Create profile data with embeddings
+    const profileData: ProfileData = {
+      private: profile.private,
+      public: profile.public,
+      ideal: profile.ideal,
+      timestamp: new Date(),
+      embedding: embeddings.embedding,
+      ideal_embedding: embeddings.ideal_embedding
+    };
+    
+    // Connect to MongoDB and perform operations in one session
+    const client = await MongoClient.connect(connectionString);
+    const db = client.db(dbName);
+    const collection = db.collection(collectionName);
+    
+    // Find existing document
+    const existingProfile = await collection.findOne({ platform, username });
+    
+    if (existingProfile) {
+      // Existing user - update profile and add to version history
+      await collection.updateOne(
+        { platform, username },
+        {
+          $set: {
+            latestProfile: profileData,
+            lastUpdated: new Date()
+          },
+          $addToSet: {
+            profileVersions: profileData
+          }
+        }
+      );
+    } else {
+      // New user - create profile
+      await collection.insertOne({
+        platform,
+        username,
+        latestProfile: profileData,
+        profileVersions: [profileData],
+        created: new Date(),
+        lastUpdated: new Date(),
+        agentId,
+        agentUsername,
+        community: agentUsername,
+        ...(chatId ? { telegramChatId: chatId } : {})
+      });
+    }
+    
+    await client.close();
+    return embeddings; // Return the embeddings for reuse
   } catch (error) {
-    elizaLogger.error(`Error finding matches: ${error}`);
-    return { matches: [] };
+    elizaLogger.error("Error storing profile:", error);
+    return null;
   }
 }
 
 /**
  * Format matches as a text response to the user
- * Uses the MATCH_PROMPT_TEMPLATE to generate a natural-sounding introduction
+ * Optimized to minimize data transformations
  */
 async function formatMatchesAsText(
   runtime: IAgentRuntime,
   matches: any[],
   username: string,
-  platform: string
+  platform: string,
+  userProfile: any
 ): Promise<string> {
   try {
-    const profileData = await getProfile(runtime, platform, username);
-    
-    // Prepare LLM context for generating a social media post
+    // Prepare LLM context with only essential data
     const postGenerationState = {
-      userProfileData: JSON.stringify(profileData, null, 2),
-      matchesData: JSON.stringify(matches, null, 2),
+      userProfileData: JSON.stringify({
+        private: userProfile.private,
+        public: userProfile.public,
+        ideal: userProfile.ideal
+      }, null, 2),
+      matchesData: JSON.stringify(matches.map(match => ({
+        platform: match.platform,
+        username: match.username,
+        profileData: {
+          private: match.profileData.private,
+          public: match.profileData.public,
+          ideal: match.profileData.ideal
+        },
+        score: match.score
+      })), null, 2),
       username,
       platform
     };
 
-    elizaLogger.info("=== State Before Template Merge ===");
-    elizaLogger.info("User Profile Data:", postGenerationState.userProfileData);
-    elizaLogger.info("Matches Data:", postGenerationState.matchesData);
-
+    // Log prompt data (minimal)
+    elizaLogger.info(`Preparing match post for ${username} with ${matches.length} candidates`);
+    
+    // Create context and generate post
     const matchPromptContext = composeContext({
       template: MATCH_PROMPT_TEMPLATE,
       state: postGenerationState as any
     });
+    
+    // Log raw prompt content
+    elizaLogger.info(`RAW_MATCH_PROMPT: ${matchPromptContext}`);
 
-    elizaLogger.info("=== Final Prompt After Template Merge ===");
-    elizaLogger.info(matchPromptContext);
-
-    // Generate the post text from the candidate profiles
     const postResult = await generateObjectArray({
       runtime,
       context: matchPromptContext,
       modelClass: ModelClass.LARGE
     });
 
+    // Log raw LLM response
+    elizaLogger.info(`RAW_MATCH_RESPONSE: ${JSON.stringify(postResult)}`);
+
     if (!postResult?.length) {
       return "I've found some matches for you, but couldn't generate the introduction. Please try again!";
     }
 
-    // Extract the post text and match details from the result
+    // Extract the post text and match details
     const matchData = postResult[0] as any;
     const postMessage = matchData?.post || "Found matches but couldn't format the message properly. Please try again!";
     
-    // Record only the specific match that was presented to the user
+    // Log LLM result (minimal)
+    elizaLogger.info(`Match post generated for ${username} with match: ${matchData?.matchUsername || "unknown"}`);
+    
+    // Record the match if we have match details
     if (matchData?.matchUsername && matchData?.matchPlatform) {
       const matchToRecord = [{
         platform: matchData.matchPlatform,
@@ -275,11 +258,9 @@ async function formatMatchesAsText(
         timestamp: new Date()
       }];
       
-      elizaLogger.info(`Recording the selected match: ${matchData.matchUsername} on ${matchData.matchPlatform}`);
       await recordMatches(runtime, platform, username, matchToRecord);
-      elizaLogger.info(`Recorded the selected match in the user's profile`);
       
-      // Send notification to the matched user about the connection using the shared function
+      // Send notification to the matched user
       await notifyMatchedUser(
         runtime,
         matchData.matchPlatform,
@@ -287,8 +268,6 @@ async function formatMatchesAsText(
         username,
         postMessage
       );
-    } else {
-      elizaLogger.warn(`Could not identify specific match from LLM response. Match not recorded.`);
     }
     
     return postMessage;
@@ -298,7 +277,7 @@ async function formatMatchesAsText(
   }
 }
 
-// Process the matchmaking request
+// Process the matchmaking request - streamlined version
 export async function processMatchmaking(
   runtime: IAgentRuntime,
   userPlatform: string,
@@ -306,25 +285,15 @@ export async function processMatchmaking(
   state: State
 ): Promise<string> {
   
-  // Get the user's profile data
-  const userProfileData = await getProfile(runtime, userPlatform, username);
+  // Fetch user profile and check match limit in parallel for faster execution
+  const [userProfileData, matchLimit] = await Promise.all([
+    getProfile(runtime, userPlatform, username),
+    checkMatchLimit(runtime, userPlatform, username)
+  ]);
   
-  if (!userProfileData || !userProfileData.profileData) {
-    elizaLogger.error(`Failed to fetch profile data for user ${username} on ${userPlatform}`);
-    return "I'm sorry, but I don't have enough information about you to find a match. Please share a bit more about yourself first.";
-  }
-  
-  // Get matches for the user
-  const matchResponse = await getMatches(
-    runtime,
-    userProfileData.profileData,
-    username,
-    userPlatform,
-    state
-  );
-  
-  if (matchResponse.limitReached) {
-    const resetTime = new Date(matchResponse.resetTime);
+  // Check if user has reached their match limit
+  if (matchLimit.isLimited) {
+    const resetTime = new Date(matchLimit.resetTime);
     const formattedResetTime = resetTime.toLocaleString('en-US', {
       hour: 'numeric',
       minute: 'numeric',
@@ -333,17 +302,98 @@ export async function processMatchmaking(
     return `You've reached your match limit for today (${DAILY_MATCH_LIMIT} matches per day). You can request more matches after ${formattedResetTime}.`;
   }
   
-  if (!matchResponse.matches || matchResponse.matches.length === 0) {
-    return "I'm sorry, but I couldn't find any suitable matches for you at the moment. Please try again later or consider sharing more about yourself.";
+  // Get or generate profile
+  const userProfile = userProfileData?.find(p => p.latestProfile)?.latestProfile;
+  
+  let profileData: ProfileData;
+  let idealEmbedding: number[];
+  
+  if (!userProfile || !userProfile.ideal_embedding) {
+    // Generate new profile if none exists or if no embeddings
+    const combinedProfile = await generateCombinedProfile(runtime, userProfileData, state);
+    if (!combinedProfile) {
+      return "I'm having trouble understanding your profile right now. Please try again or share more about yourself.";
+    }
+    
+    // Store the new profile
+    const storeResult = await storeProfile(
+      runtime, 
+      userPlatform, 
+      username, 
+      combinedProfile
+    );
+    
+    if (!storeResult) {
+      return "I encountered an error while updating your profile. Please try again later.";
+    }
+    
+    // Use embeddings directly from the store result
+    profileData = {
+      private: combinedProfile.private,
+      public: combinedProfile.public,
+      ideal: combinedProfile.ideal,
+      timestamp: new Date(),
+      embedding: storeResult.embedding,
+      ideal_embedding: storeResult.ideal_embedding
+    };
+    
+    idealEmbedding = storeResult.ideal_embedding;
+  } else {
+    // Use existing profile
+    profileData = userProfile as ProfileData;
+    idealEmbedding = userProfile.ideal_embedding;
   }
   
-  // Format the matches for the user
-  const formattedResponse = await formatMatchesAsText(runtime, matchResponse.matches, username, userPlatform);
+  // Find matches using vector search
+  const candidates = await findMatchingProfilesWithAtlasSearch(
+    runtime, 
+    idealEmbedding, 
+    userPlatform, 
+    username, 
+    state
+  );
+  
+  // Record the match request
+  await recordMatchRequest(runtime, userPlatform, username);
+  
+  // Get updated match limit after recording the request
+  const updatedMatchLimit = await checkMatchLimit(runtime, userPlatform, username);
+  
+  // No matches found
+  if (!candidates.length) {
+    return "I've updated your profile but couldn't find any matches yet. I'll keep looking!";
+  }
+  
+  // Format matches as text
+  const formattedResponse = await formatMatchesAsText(
+    runtime, 
+    candidates, 
+    username, 
+    userPlatform,
+    profileData
+  );
   
   // Add information about remaining matches
   let remainingCountMessage = "";
-  if (matchResponse.remainingCount !== undefined) {
-    remainingCountMessage = `\n\nYou have ${matchResponse.remainingCount} more match requests available today.`;
+  if (updatedMatchLimit.remaining !== undefined) {
+    // Log match limit info
+    elizaLogger.info(`Match limit for ${username}: ${updatedMatchLimit.remaining} remaining out of ${DAILY_MATCH_LIMIT}`);
+    
+    // Use the updated remaining count
+    const actualRemaining = updatedMatchLimit.remaining;
+    
+    if (actualRemaining > 0) {
+      remainingCountMessage = `\n\nYou have ${actualRemaining} more match requests available today.`;
+    } else {
+      const resetTime = new Date(updatedMatchLimit.resetTime || new Date());
+      const formattedResetTime = resetTime.toLocaleString('en-US', {
+        hour: 'numeric',
+        minute: 'numeric',
+        hour12: true
+      });
+      
+      remainingCountMessage = `\n\nYou've reached your match limit for today (${DAILY_MATCH_LIMIT} matches per day). You can request more matches after ${formattedResetTime}.`;
+    }
   }
   
   return `${formattedResponse}${remainingCountMessage}`;
@@ -358,9 +408,7 @@ export const publishAndFindMatch: Action = {
     const requiredEnvVars = [
       "MONGODB_CONNECTION_STRING_CKG",
       "MONGODB_DATABASE_CKG",
-      "TELEGRAM_INVITE_LINK",
-      // MONGODB_VECTOR_INDEX_NAME is optional as it falls back to DEFAULT_VECTOR_INDEX_NAME
-      // MONGODB_DATABASE_COLLECTION is optional as it falls back to platform name
+      "MONGODB_VECTOR_INDEX"
     ];
 
     const missingVars = requiredEnvVars.filter((varName) => !runtime.getSetting(varName));
@@ -380,124 +428,52 @@ export const publishAndFindMatch: Action = {
     callback: HandlerCallback    
   ): Promise<boolean> => {
     try {
-      // Extract username from state or message
+      // Extract username and platform
       const username = state?.actorsData?.find(actor => actor.id === message.userId)?.username || message.userId;
-      
-      // Get platform type from client
-      const clients = runtime.clients;
-      let platform = Object.keys(clients)[0];
+      const platform = Object.keys(runtime.clients)[0];
 
-      elizaLogger.info("User platform details:", {
-        username,
-        platform
-      });
+      elizaLogger.info("Processing match request for:", { username, platform });
 
-      // Get existing user profile data (from CKG)
-      const userProfileData = await getProfile(runtime, platform, username);
-      
-      // Update state with recent messages and existing intentions
-      if (!state) {
-        state = await runtime.composeState(message);
-      }
+      // Update state with user information and recent messages
+      state = state || await runtime.composeState(message);
       state = await runtime.updateRecentMessageState(state);
-
-      // Generate a new intention ID that will only be used if needed
-      const newIntentionId = `int_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const newProjectId = `int_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      state.intentid = newIntentionId;
-      state.projectid = newProjectId;
-      state.uuid = message.userId;
-      state.platform = platform;
       state.username = username;
+      state.platform = platform;
       state.timestamp = new Date().toISOString();
+      
+      // Get user profile data
+      const userProfileData = await getProfile(runtime, platform, username);
       state.userProfileData = JSON.stringify(userProfileData || [], null, 2);
-      state.shaclShapes = SHACL_SHAPES;
-
-      const context = composeContext({
-        template: KG_EXTRACTION_TEMPLATE,
-        state,
-      });
-
-      elizaLogger.info("Populated Context for KG Extraction:", {
-        context,
-      });
-
-      const result = await generateObjectArray({
-        runtime,
-        context,
-        modelClass: ModelClass.LARGE,
-      });
-
-      if (!result || result.length === 0) {
-        elizaLogger.info("No professional intention to publish - empty result");
-        // This is a recurring user, so no need to send the invitation
-        callback({
-          text: "I found your anonym intent is already published and no update was needed! Let me know if you wanna add any more details but telling me about yourself or who you are looking for.",
-        });
-        return true;
-      }
-
-      const firstResult = result[0];
-      const analysis = firstResult.analysis;
-      elizaLogger.info("Professional intention analysis:", analysis);
-
-      if (analysis.matchType === "exact_match") {
-        elizaLogger.info("Exact match found - no updates needed");
-        // This is a recurring user, so no need to send the invitation
-        callback({
-          text: "I found your anonym intent is already published and no update was needed! Let me know if you wanna add any more details but telling me about yourself or who you are looking for.",
-        });
-        return true;
-      }
-
-      // If it's an update to an existing intention, use that ID
-      const isFirstTimeUser = analysis.matchType !== "update_existing" && (!userProfileData || userProfileData.length === 0);
+      //state.shaclShapes = SHACL_SHAPES;
       
-      if (analysis.matchType === "update_existing" && analysis.existingIntentionId) {
-        state.intentid = analysis.existingIntentionId;
-        elizaLogger.info("Updating existing professional intention:", {
-          existingId: analysis.existingIntentionId,
-          reason: analysis.reason,
-        });
-      }
-
-      const { public: publicJsonLd, private: privateJsonLd } = firstResult;
-
-      elizaLogger.info("=== Generated JSON-LD for CKG ===");
-      elizaLogger.info("Public JSON-LD:", {
-        data: publicJsonLd,
-      });
-      elizaLogger.info("Private JSON-LD:", {
-        data: privateJsonLd,
-      });
-
-      // Create combined profile data
-      const newProfileData = {
-        ...privateJsonLd,
-        ...publicJsonLd
-      };
-
-      // Get chat ID for notification purposes
-      let chatId: string | undefined;
-      const telegramClient = runtime.clients['telegram'] as any;
-
-      // Try to get user's chatId directly from the messageManager
-      if (telegramClient?.messageManager?.getUserChatId) {
-        chatId = telegramClient.messageManager.getUserChatId(username);
-      }
-
-      // Store profile in MongoDB CKG with chat ID if available
-      const storeResult = await storeProfileInCkg(runtime, platform, username, publicJsonLd, privateJsonLd, chatId, telegramClient);
+      // Generate combined profile
+      elizaLogger.info("Generating combined profile...");
+      const combinedProfile = await generateCombinedProfile(runtime, userProfileData, state);
       
-      if (!storeResult) {
-        elizaLogger.error("Failed to store profile in MongoDB CKG");
-        callback({ 
-          text: "I'm having trouble updating your profile right now. Please try again in a moment." 
+      if (!combinedProfile) {
+        elizaLogger.error("Failed to generate combined profile");
+        callback({
+          text: "I think i need to know more about you. Please share more about background and goals."
         });
         return false;
       }
+      
+      // If no updates needed, return early
+      if (combinedProfile.analysis.matchType === "exact_match") {
+        elizaLogger.info("Exact match found - no updates needed");
+        callback({
+          text: "I found your profile is already published and no update was needed! Let me know if you want to add any more details about yourself or who you are looking to connect with."
+        });
+        return true;
+      }
 
-      // Only send invitation to first-time users if the feature is enabled
+      elizaLogger.info("Storing profile in database...");
+      
+      // Check if this is a first-time user
+      const isFirstTimeUser = combinedProfile.analysis.matchType === "new_information" && 
+                             (!userProfileData || userProfileData.length === 0 || !userProfileData.some(profile => profile.latestProfile));
+      
+      // Send invitation to first-time users if feature is enabled
       if (isFirstTimeUser && SEND_TELEGRAM_GROUP_INVITES) {
         elizaLogger.info("First-time user detected, sending Telegram group invitation");
         const telegramInviteLink = runtime.getSetting("TELEGRAM_INVITE_LINK");
@@ -506,113 +482,92 @@ export const publishAndFindMatch: Action = {
         });
       }
 
-      elizaLogger.info("=== Starting Match Search ===");
-      // Generate ideal match profile based on the user's profile
-      const idealMatchDescription = await generateIdealMatchProfile(runtime, newProfileData, state);
+      // Store profile and get embeddings in one operation
+      const storeResult = await storeProfile(
+        runtime, 
+        platform, 
+        username, 
+        combinedProfile
+      );
       
-      if (!idealMatchDescription) {
-        elizaLogger.error("Failed to generate ideal match profile description");
-        callback({
-          text: "I'm sorry, but I encountered an error while trying to find a match for you. Please try again later."
-        });
-        return;
-      }
-      
-      // Generate embedding for the ideal match profile
-      elizaLogger.info("Generating embedding for ideal match profile");
-      const idealMatchEmbedding = await generateProfileEmbedding(runtime, { ideal_match_description: idealMatchDescription });
-      
-      // Validate embedding before search
-      if (!idealMatchEmbedding || idealMatchEmbedding.length === 0) {
-        elizaLogger.error("Failed to generate embedding for ideal match profile");
+      if (!storeResult) {
+        elizaLogger.error("Failed to store profile or generate embeddings");
         callback({ 
-          text: "I've updated your profile but I'm having trouble finding matches right now. Please try again later!" 
+          text: "I'm having trouble updating your profile right now. Please try again in a moment." 
         });
-        return true;
+        return false;
       }
       
-      elizaLogger.info(`Generated embedding with ${idealMatchEmbedding.length} dimensions for search`);
-      elizaLogger.info(`Sample values: [${idealMatchEmbedding.slice(0, 5).join(', ')}...]`);
+      // Use the embeddings directly from storage operation
+      const candidates = await findMatchingProfilesWithAtlasSearch(
+        runtime, 
+        storeResult.ideal_embedding, 
+        platform, 
+        username, 
+        state
+      );
       
-      // Find matches using Atlas Search with the ideal profile embedding
-      const candidates = await findMatchingProfilesWithAtlasSearch(runtime, idealMatchEmbedding, platform, username, state);
-      
+      // No matches found
       if (!candidates.length) {
-        // Only add delay if we sent the invitation
-        if (isFirstTimeUser && SEND_TELEGRAM_GROUP_INVITES) {
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
         callback({ 
           text: "I've updated your profile and I'm searching my network for connections. No matches found yet, but I'll keep looking!" 
         });
         return true;
       }
 
-      // Prepare LLM context for generating a social media post
-      const postGenerationState = {
-        ...state,
-        userProfileData: JSON.stringify(newProfileData, null, 2),
-        matchesData: JSON.stringify(candidates, null, 2)
+      // Record match request for rate limiting
+      await recordMatchRequest(runtime, platform, username);
+      
+      // Get updated match limit after recording the request
+      const updatedMatchLimit = await checkMatchLimit(runtime, platform, username);
+      
+      // Create profile data object for context
+      const profileData = {
+        private: combinedProfile.private,
+        public: combinedProfile.public,
+        ideal: combinedProfile.ideal,
+        timestamp: new Date(),
+        embedding: storeResult.embedding,
+        ideal_embedding: storeResult.ideal_embedding
       };
-
-      const matchPromptContext = composeContext({
-        template: MATCH_PROMPT_TEMPLATE,
-        state: postGenerationState
-      });
-
-
-      // Generate the post text from the candidate profiles
-      const postResult = await generateObjectArray({
+      
+      // Format matches as text
+      const formattedResponse = await formatMatchesAsText(
         runtime,
-        context: matchPromptContext,
-        modelClass: ModelClass.LARGE
-      });
-
-      if (!postResult?.length) {
-        // Only add delay if we sent the invitation
-        if (isFirstTimeUser && SEND_TELEGRAM_GROUP_INVITES) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
+        candidates, 
+        username, 
+        platform,
+        profileData
+      );
+      
+      // Add information about remaining matches
+      let remainingCountMessage = "";
+      if (updatedMatchLimit.remaining !== undefined) {
+        // Log match limit info
+        elizaLogger.info(`Match limit for ${username}: ${updatedMatchLimit.remaining} remaining out of ${DAILY_MATCH_LIMIT}`);
+        
+        // Use the updated remaining count
+        const actualRemaining = updatedMatchLimit.remaining;
+        
+        if (actualRemaining > 0) {
+          remainingCountMessage = `\n\nYou have ${actualRemaining} more match requests available today.`;
+        } else {
+          const resetTime = new Date(updatedMatchLimit.resetTime || new Date());
+          const formattedResetTime = resetTime.toLocaleString('en-US', {
+            hour: 'numeric',
+            minute: 'numeric',
+            hour12: true
+          });
+          
+          remainingCountMessage = `\n\nYou've reached your match limit for today (${DAILY_MATCH_LIMIT} matches per day). You can request more matches after ${formattedResetTime}.`;
         }
-        callback({ text: "I've updated your profile and found some matches, but couldn't generate the introduction. Please try again!" });
-        return true;
-      }
-
-      // Extract the post text and match details from the result
-      const matchData = postResult[0] as any;
-      const postMessage = matchData?.post || "Found matches but couldn't format the message properly. Please try again!";
-      
-      // Record only the specific match that was presented to the user
-      if (matchData?.matchUsername && matchData?.matchPlatform) {
-        const matchToRecord = [{
-          platform: matchData.matchPlatform,
-          username: matchData.matchUsername,
-          timestamp: new Date()
-        }];
-        
-        elizaLogger.info(`Recording the selected match: ${matchData.matchUsername} on ${matchData.matchPlatform}`);
-        await recordMatches(runtime, platform, username, matchToRecord);
-        elizaLogger.info(`Recorded the selected match in the user's profile`);
-        
-        // Send notification to the matched user about the connection using the shared function
-        await notifyMatchedUser(
-          runtime,
-          matchData.matchPlatform,
-          matchData.matchUsername,
-          username,
-          postMessage
-        );
-      } else {
-        elizaLogger.warn(`Could not identify specific match from LLM response. Match not recorded.`);
       }
       
-      // Only add delay if we sent the invitation
-      if (isFirstTimeUser && SEND_TELEGRAM_GROUP_INVITES) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-      callback({ text: postMessage });
+      callback({ text: `${formattedResponse}${remainingCountMessage}` });
       return true;
     } catch (error) {
       elizaLogger.error("Error in publishAndFindMatch handler:", error);
+      callback({ text: "I encountered an error while processing your request. Please try again later." });
       return false;
     }
   },

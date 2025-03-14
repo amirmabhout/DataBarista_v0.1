@@ -15,6 +15,7 @@ export const databaristaPlugin: Plugin = {
     actions: [
         publishAndFindMatch,
         noneAction,
+        simSynteticProfile,
         serendipityAction
     ],
     evaluators: [],

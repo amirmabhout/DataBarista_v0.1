@@ -7,13 +7,14 @@ import {
     ActionExample,
     type Action,
     composeContext,
-    generateObjectArray
+    generateObjectArray,
+    embed
   } from "@elizaos/core";
+import { MongoClient } from 'mongodb';
 import { MATCH_PROMPT_TEMPLATE } from "../utils/promptTemplates";
 import { getProfile } from "../utils/profileUtils";
 import { 
-  generateIdealMatchProfile, 
-  generateProfileEmbedding, 
+  generateCombinedProfile,
   findMatchingProfilesWithAtlasSearch,
   notifyMatchedUser,
   checkMatchLimit,
@@ -22,40 +23,292 @@ import {
 } from "../utils/matchingUtils";
 import { DAILY_MATCH_LIMIT } from "../utils/constants";
 
+/**
+ * Interface for profile data
+ */
+interface ProfileData {
+  private: string;
+  public: string;
+  ideal: string;
+  timestamp: Date;
+  embedding?: number[];
+  ideal_embedding?: number[];
+}
+
+/**
+ * Generate embeddings for profile data directly
+ */
+async function generateProfileEmbeddings(
+  runtime: IAgentRuntime,
+  profileData: {
+    private: string;
+    public: string;
+    ideal: string;
+  }
+): Promise<{
+  embedding: number[];
+  ideal_embedding: number[];
+} | null> {
+  try {
+    // Generate embeddings in parallel for faster execution
+    const [profileEmbedding, idealEmbedding] = await Promise.all([
+      embed(runtime, `${profileData.private} ${profileData.public}`),
+      embed(runtime, profileData.ideal)
+    ]);
+    
+    if (!profileEmbedding || !idealEmbedding) {
+      elizaLogger.error("Failed to generate embeddings for profile");
+      return null;
+    }
+    
+    return {
+      embedding: profileEmbedding,
+      ideal_embedding: idealEmbedding
+    };
+  } catch (error) {
+    elizaLogger.error("Error generating profile embeddings:", error);
+    return null;
+  }
+}
+
+/**
+ * Store profile data in MongoDB
+ * Returns embeddings on success for reuse
+ */
+async function storeProfile(
+  runtime: IAgentRuntime,
+  platform: string,
+  username: string,
+  profile: {
+    private: string;
+    public: string;
+    ideal: string;
+    analysis: {
+      matchType: 'exact_match' | 'update_existing' | 'new_information';
+      reason: string;
+    };
+  }
+): Promise<{
+  embedding: number[];
+  ideal_embedding: number[];
+} | null> {
+  try {
+    // Get MongoDB connection info
+    const connectionString = runtime.getSetting('MONGODB_CONNECTION_STRING_CKG');
+    const dbName = runtime.getSetting('MONGODB_DATABASE_CKG');
+    const collectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || platform;
+    
+    // Validate connection info
+    if (!connectionString || !dbName) {
+      elizaLogger.error('Missing MongoDB connection settings');
+      return null;
+    }
+    
+    // Get agent details from runtime
+    const agentId = runtime.agentId;
+    let agentUsername = runtime.character?.username || runtime.character?.name;
+    
+    // Try to get the actual bot username from Telegram client if available
+    const telegramClient = runtime.clients['telegram'] as any;
+    if (telegramClient?.bot?.botInfo?.username) {
+      agentUsername = telegramClient.bot.botInfo.username.replace(/^@/, '');
+    }
+    
+    // Get chat ID if available
+    let chatId: string | undefined;
+    if (telegramClient?.messageManager?.getUserChatId) {
+      chatId = telegramClient.messageManager.getUserChatId(username);
+    }
+    
+    // Generate embeddings for the profile
+    const embeddings = await generateProfileEmbeddings(runtime, profile);
+    if (!embeddings) {
+      elizaLogger.error("Failed to generate embeddings for profile");
+      return null;
+    }
+    
+    // Create profile data with embeddings
+    const profileData: ProfileData = {
+      private: profile.private,
+      public: profile.public,
+      ideal: profile.ideal,
+      timestamp: new Date(),
+      embedding: embeddings.embedding,
+      ideal_embedding: embeddings.ideal_embedding
+    };
+    
+    // Connect to MongoDB and perform operations in one session
+    const client = await MongoClient.connect(connectionString);
+    const db = client.db(dbName);
+    const collection = db.collection(collectionName);
+    
+    // Find existing document
+    const existingProfile = await collection.findOne({ platform, username });
+    
+    if (existingProfile) {
+      // Existing user - update profile and add to version history
+      await collection.updateOne(
+        { platform, username },
+        {
+          $set: {
+            latestProfile: profileData,
+            lastUpdated: new Date()
+          },
+          $addToSet: {
+            profileVersions: profileData
+          }
+        }
+      );
+    } else {
+      // New user - create profile
+      await collection.insertOne({
+        platform,
+        username,
+        latestProfile: profileData,
+        profileVersions: [profileData],
+        created: new Date(),
+        lastUpdated: new Date(),
+        agentId,
+        agentUsername,
+        community: agentUsername,
+        ...(chatId ? { telegramChatId: chatId } : {})
+      });
+    }
+    
+    await client.close();
+    return embeddings; // Return the embeddings for reuse
+  } catch (error) {
+    elizaLogger.error("Error storing profile:", error);
+    return null;
+  }
+}
+
+/**
+ * Format matches as a text response to the user
+ * Optimized to minimize data transformations
+ */
+async function formatMatchesAsText(
+  runtime: IAgentRuntime,
+  matches: any[],
+  username: string,
+  platform: string,
+  userProfile: any
+): Promise<string> {
+  try {
+    // Prepare LLM context with only essential data
+    const postGenerationState = {
+      userProfileData: JSON.stringify({
+        private: userProfile.private,
+        public: userProfile.public,
+        ideal: userProfile.ideal
+      }, null, 2),
+      matchesData: JSON.stringify(matches.map(match => ({
+        platform: match.platform,
+        username: match.username,
+        profileData: {
+          private: match.profileData.private,
+          public: match.profileData.public,
+          ideal: match.profileData.ideal
+        },
+        score: match.score
+      })), null, 2),
+      username,
+      platform
+    };
+    
+    // Log preparation information
+    elizaLogger.info(`Preparing match post for ${username} with ${matches.length} candidates`);
+    
+    // Create context and generate post
+    const matchPromptContext = composeContext({
+      template: MATCH_PROMPT_TEMPLATE,
+      state: postGenerationState as any
+    });
+    
+    // Log raw prompt content
+    elizaLogger.info(`RAW_MATCH_PROMPT: ${matchPromptContext}`);
+    
+    // Generate the post text from the candidate profiles
+    const postResult = await generateObjectArray({
+      runtime,
+      context: matchPromptContext,
+      modelClass: ModelClass.LARGE
+    });
+    
+    // Log raw LLM response
+    elizaLogger.info(`RAW_MATCH_RESPONSE: ${JSON.stringify(postResult)}`);
+    
+    if (!postResult?.length) {
+      return "Found matches but couldn't generate the post. Please try again later!";
+    }
+    
+    // Extract the post text and match details
+    const matchData = postResult[0] as any;
+    const postMessage = matchData?.post || "Found matches but couldn't format the message properly. Please try again!";
+    
+    // Log LLM result (minimal)
+    elizaLogger.info(`Match post generated for ${username} with match: ${matchData?.matchUsername || "unknown"}`);
+    
+    // Record the match if we have match details
+    if (matchData?.matchUsername && matchData?.matchPlatform) {
+      const matchToRecord = [{
+        platform: matchData.matchPlatform,
+        username: matchData.matchUsername,
+        timestamp: new Date()
+      }];
+      
+      await recordMatches(runtime, platform, username, matchToRecord);
+      
+      // Send notification to the matched user
+      await notifyMatchedUser(
+        runtime,
+        matchData.matchPlatform,
+        matchData.matchUsername,
+        username,
+        postMessage
+      );
+    }
+    
+    return postMessage;
+  } catch (error) {
+    elizaLogger.error("Error formatting matches:", error);
+    return "I found some matches for you, but encountered an error while formatting the results.";
+  }
+}
   
 export const serendipityAction: Action = {
-  id: 'SERENDIPITY_ACTION',
-    name: "SERENDIPITY",
-    similes: ["FIND_MATCHES", "DISCOVER_CONNECTIONS"],
-    description: "Finds most compatible matches from the databarista's network and introduces them together. Choose this action when user provided enough information to find a suitable match, if not use NONE and keep continuing the conversation with the user. This action is used only after (PUBLISH_INTENT_DKG) action is chosen atleast once in history of convo with user.",
+  name: "SERENDIPITY_ACTION",
+  similes: ["FIND_MATCHES", "DISCOVER_CONNECTIONS"],
+  description: "Finds most compatible matches from the databarista's network and introduces them together. Choose this action when user provided enough information to find a suitable match, if not use NONE and keep continuing the conversation with the user.",
   
     validate: async (runtime: IAgentRuntime, _message: Memory) => {
-    const requiredVars = ["MONGODB_CONNECTION_STRING_CKG", "MONGODB_DATABASE_CKG"];
+    const requiredVars = [
+      "MONGODB_CONNECTION_STRING_CKG", 
+      "MONGODB_DATABASE_CKG",
+      "MONGODB_VECTOR_INDEX"
+    ];
       return requiredVars.every(v => runtime.getSetting(v));
     },
   
   handler: async (runtime: IAgentRuntime, message: any, state?: any, _conversation?: any, callback?: any): Promise<boolean> => {
     try {
       if (!callback) {
-        // If we don't have a callback function to send responses with, we can't proceed
         elizaLogger.error("No callback function provided");
         return false;
       }
 
+      // Get user context
       let activeState = state || {};
-  
-        // Extract username from state or message
       const username = activeState?.actorsData?.find((actor: any) => actor.id === message.userId)?.username || message.userId;
-        
-        // Get platform type from client
-        const clients = runtime.clients;
-        let platform = Object.keys(clients)[0];
+      const platform = Object.keys(runtime.clients)[0];
 
-        elizaLogger.info("=== Serendipity Action Started ===");
-        elizaLogger.info("User Context:", { username, platform });
+      elizaLogger.info("Processing serendipity request for:", { username, platform });
   
-      // First check if the user has reached their match limit
-      const matchLimit = await checkMatchLimit(runtime, platform, username);
+      // Fetch user profile and check match limit in parallel for faster execution
+      const [userProfileData, matchLimit] = await Promise.all([
+        getProfile(runtime, platform, username),
+        checkMatchLimit(runtime, platform, username)
+      ]);
       
       if (matchLimit.isLimited) {
         elizaLogger.info(`User has reached the daily match limit of ${DAILY_MATCH_LIMIT} matches.`);
@@ -73,165 +326,165 @@ export const serendipityAction: Action = {
         return true;
       }
 
-      // Get user profile using MongoDB
-      let profileData = await getProfile(runtime, platform, username);
-
-      if (!profileData || profileData.length === 0) {
+      if (!userProfileData || userProfileData.length === 0) {
         callback({ text: "I don't have enough information about your profile yet. Let's talk a bit more so I can understand what you're looking for." });
             return false;
           }
 
-      const rawProfile = profileData[0];
-
-      if (!activeState.bio) {
+      // Update state with recent messages
+      if (!activeState.recentMessages) {
         activeState = await runtime.composeState(message);
+        activeState = await runtime.updateRecentMessageState(activeState);
       }
-      activeState = await runtime.updateRecentMessageState(activeState);
       activeState.username = username;
       activeState.platform = platform;
+      activeState.timestamp = new Date().toISOString();
 
-      // Generate ideal match profile based on the user's profile
-      elizaLogger.info("=== Starting Match Search ===");
-      const idealMatchDescription = await generateIdealMatchProfile(runtime, rawProfile, activeState);
+      // Get or generate profile
+      const userProfile = userProfileData.find(p => p.latestProfile)?.latestProfile;
       
-      if (!idealMatchDescription) {
-        elizaLogger.error("Failed to generate ideal match profile description");
+      let profileData: ProfileData;
+      let idealEmbedding: number[];
+      
+      if (!userProfile || !userProfile.ideal_embedding) {
+        // Generate new profile if none exists or if no embeddings
+        elizaLogger.info("No profile with embeddings found, generating one now...");
+        const combinedProfile = await generateCombinedProfile(runtime, userProfileData, activeState);
+        
+        if (!combinedProfile) {
         callback({
-          text: "I'm sorry, but I encountered an error while trying to find a match for you. Please try again later."
+            text: "I'm having trouble understanding your profile right now. Let's talk more so I can get a better picture of what you're looking for." 
         });
         return false;
       }
       
-      // Generate embedding for the ideal match profile
-      elizaLogger.info("Generating embedding for ideal match profile");
-      const idealMatchEmbedding = await generateProfileEmbedding(runtime, { ideal_match_description: idealMatchDescription });
-      
-      // Validate embedding before search
-      if (!idealMatchEmbedding || idealMatchEmbedding.length === 0) {
-        elizaLogger.error("Failed to generate embedding for ideal match profile");
+        // Store the new profile and get embeddings in one operation
+        const storeResult = await storeProfile(
+          runtime, 
+          platform, 
+          username, 
+          combinedProfile
+        );
+        
+        if (!storeResult) {
         callback({ 
-          text: "I'm having trouble finding matches right now. Please try again later!" 
-        });
-        return true;
+            text: "I'm having trouble updating your profile right now. Please try again in a moment."
+          });
+          return false;
+        }
+        
+        // Use embeddings directly from the store result
+        profileData = {
+          private: combinedProfile.private,
+          public: combinedProfile.public,
+          ideal: combinedProfile.ideal,
+          timestamp: new Date(),
+          embedding: storeResult.embedding,
+          ideal_embedding: storeResult.ideal_embedding
+        };
+        
+        idealEmbedding = storeResult.ideal_embedding;
+      } else {
+        // Use existing profile
+        profileData = userProfile as ProfileData;
+        idealEmbedding = userProfile.ideal_embedding;
       }
       
-      elizaLogger.info(`Generated embedding with ${idealMatchEmbedding.length} dimensions for search`);
-      elizaLogger.info(`Sample values: [${idealMatchEmbedding.slice(0, 5).join(', ')}...]`);
+      elizaLogger.info(`Using embedding with ${idealEmbedding.length} dimensions for search`);
       
-      // Find matches using Atlas Search with the ideal profile embedding
-      const candidates = await findMatchingProfilesWithAtlasSearch(runtime, idealMatchEmbedding, platform, username, state);
+      // Find matches using vector search
+      const candidates = await findMatchingProfilesWithAtlasSearch(
+        runtime, 
+        idealEmbedding, 
+        platform, 
+        username, 
+        activeState
+      );
       
         if (!candidates.length) {
-          callback({ text: "No matches found yet. I'll keep searching!" });
+        callback({ text: "I've searched my network but couldn't find any matches for you yet. I'll keep looking!" });
           return true;
         }
       
-      // Record the match request to track rate limiting
+      // Record the match request for rate limiting
       await recordMatchRequest(runtime, platform, username);
   
-        // Prepare LLM context for generating a social media post
-      // No need to strip embeddings as they are excluded in the MongoDB query
-        const postGenerationState = {
-        ...activeState,
-        userProfileData: JSON.stringify(rawProfile, null, 2),
-          matchesData: JSON.stringify(candidates, null, 2)
-        };
+      // Get the updated match limit after recording the request
+      const updatedMatchLimit = await checkMatchLimit(runtime, platform, username);
   
-        elizaLogger.info("=== State Before Template Merge ===");
-        elizaLogger.info("User Profile Data:", postGenerationState.userProfileData);
-        elizaLogger.info("Matches Data:", postGenerationState.matchesData);
-        elizaLogger.info("=================================");
-  
-        const context = composeContext({
-          template: MATCH_PROMPT_TEMPLATE,
-          state: postGenerationState
-        });
-  
-        elizaLogger.info("=== Final Prompt After Template Merge ===");
-        elizaLogger.info(context);
-        elizaLogger.info("=======================================");
-  
-        // Generate the post text from the candidate profiles
-        const postResult = await generateObjectArray({
+      // Format matches as text
+      const formattedResponse = await formatMatchesAsText(
           runtime,
-          context,
-          modelClass: ModelClass.LARGE
-        });
-  
-        if (!postResult?.length) {
-          callback({ text: "Found matches but couldn't generate the post. Please try again later!" });
-          return true;
-        }
-  
-        // Extract the post text from the result array
-        const postMessage = postResult[0]?.post || "Found matches but couldn't format the message properly. Please try again!";
-  
-      // Record only the specific match that was presented to the user
-      const selectedMatch = postResult[0];
-      if (selectedMatch?.matchUsername && selectedMatch?.matchPlatform) {
-        const matchToRecord = [{
-          platform: selectedMatch.matchPlatform,
-          username: selectedMatch.matchUsername,
-          timestamp: new Date()
-        }];
-        
-        elizaLogger.info(`Recording the selected match: ${selectedMatch.matchUsername} on ${selectedMatch.matchPlatform}`);
-        await recordMatches(runtime, platform, username, matchToRecord);
-        elizaLogger.info(`Recorded the selected match in the user's profile`);
-        
-        // Send notification to the matched user about the connection using the shared function
-        await notifyMatchedUser(
-          runtime,
-          selectedMatch.matchPlatform,
-          selectedMatch.matchUsername,
+        candidates, 
           username,
-          postMessage,
-          callback // Pass the callback function for direct messaging
+        platform,
+        profileData
         );
-      } else {
-        elizaLogger.warn(`Could not identify specific match from LLM response. Match not recorded.`);
-      }
       
       // Add information about remaining matches
       let remainingCountMessage = "";
-      if (matchLimit.remaining !== undefined) {
-        const remaining = matchLimit.remaining - 1;
-        remainingCountMessage = `\n\nYou have ${remaining} more match requests available today.`;
+      if (updatedMatchLimit.remaining !== undefined) {
+        // Log match limit info
+        elizaLogger.info(`Match limit for ${username}: ${updatedMatchLimit.remaining} remaining out of ${DAILY_MATCH_LIMIT}`);
+        
+        // Use the updated remaining count that accounts for the request we just recorded
+        const actualRemaining = updatedMatchLimit.remaining;
+        
+        if (actualRemaining > 0) {
+          remainingCountMessage = `\n\nYou have ${actualRemaining} more match requests available today.`;
+        } else {
+          const resetTime = new Date(updatedMatchLimit.resetTime || new Date());
+          const formattedResetTime = resetTime.toLocaleString('en-US', {
+            hour: 'numeric',
+            minute: 'numeric',
+            hour12: true
+          });
+          
+          remainingCountMessage = `\n\nYou've reached your match limit for today (${DAILY_MATCH_LIMIT} matches per day). You can request more matches after ${formattedResetTime}.`;
+        }
       }
 
-      callback({ text: `${postMessage}${remainingCountMessage}` });
+      callback({ text: `${formattedResponse}${remainingCountMessage}` });
         return true;
-  
       } catch (error) {
-        elizaLogger.error("Serendipity error", error);
-        callback({ text: "Matchmaking system busy. Please try again later!" });
+      elizaLogger.error("Error in serendipity handler:", error);
+      callback({ text: "I encountered an error while processing your request. Please try again later." });
         return false;
       }
     },
   
     examples: [
-      [{
+    [
+      {
         user: "DataBarista",
         content: {
-          text: "Searching for professionals in web3 marketing...",
-          action: "SERENDIPITY"
+          "text": "I'll search my network for connections that match your interests! (SERENDIPITY)",
+          "action": "(SERENDIPITY)"
+        },
+      }
+    ],
+    [
+      {
+        "user": "DataBarista",
+        "content": {
+          "text": "Would you like me to find you a match from my network? (SERENDIPITY)",
+          "action": "(SERENDIPITY)"
         }
       },
       {
-        user: "User",
-        content: { text: "Find me blockchain developers" }
-      }],
-      [{
-        user: "User",
-        content: {
-          text: "/new_match"
+        "user": "{{user2}}",
+        "content": {
+          "text": "Yes please!"
         }
       },
       {
-        user: "DataBarista",
-        content: { text: "Coming right up!" },
-        action: "SERENDIPITY"
-      }]
+        "user": "DataBarista",
+        "content": {
+          "text": "Great! Let me search my network for someone who matches your interests.",
+          "action": "(SERENDIPITY)"
+        }
+      }
+    ]
     ] as ActionExample[][]
-  } as Action;
+};
   

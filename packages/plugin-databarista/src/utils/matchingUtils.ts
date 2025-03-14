@@ -10,7 +10,7 @@ import {
   type HandlerCallback
 } from "@elizaos/core";
 import { MongoClient } from 'mongodb';
-import { IDEAL_MATCH_TEMPLATE } from "./promptTemplates";
+import { COMBINED_PROFILE_TEMPLATE } from "./promptTemplates";
 import { SHACL_SHAPES } from "./shaclShapes";
 import { DAILY_MATCH_LIMIT, DEFAULT_VECTOR_INDEX_NAME, MONGODB_VECTOR_INDEX_ENV_VAR } from "./constants";
 
@@ -68,6 +68,9 @@ interface TelegramClient {
 
 /**
  * Generates an ideal match profile description based on user profile data
+ * This is a compatibility function that uses the new generateCombinedProfile
+ * and returns just the ideal section
+ * 
  * @param runtime Agent runtime
  * @param userProfileData User profile data
  * @param state Current state
@@ -79,42 +82,18 @@ export async function generateIdealMatchProfile(
   state?: State
 ): Promise<string | null> {
   try {
-    elizaLogger.debug('Generating ideal match profile with context');
+    elizaLogger.debug('Generating ideal match profile using combined profile generator');
     
-    // Update state with recent messages if not present
-    if (state && !state.recentMessages) {
-      state = await runtime.updateRecentMessageState(state);
-    }
-
-    const context = composeContext({
-      template: IDEAL_MATCH_TEMPLATE,
-      state: {
-        shaclShapes: SHACL_SHAPES,
-        userProfileData: JSON.stringify(userProfileData, null, 2),
-        recentMessages: state?.recentMessages || []
-      } as any
-    });
-
-    const idealMatchResult = await generateObjectArray({
-      runtime,
-      context,
-      modelClass: ModelClass.LARGE
-    });
-
-    if (!idealMatchResult?.length) {
-      elizaLogger.error("Failed to generate ideal match profile: empty result");
-      return null;
-    }
-
-    // Extract the ideal match description text
-    const idealMatchDescription = idealMatchResult[0].ideal_match_description;
+    // Use the new combined profile generator
+    const combinedProfile = await generateCombinedProfile(runtime, userProfileData, state);
     
-    if (!idealMatchDescription) {
-      elizaLogger.error("Invalid ideal match description format: missing ideal_match_description field");
+    if (!combinedProfile) {
+      elizaLogger.error("Failed to generate combined profile for ideal match");
       return null;
     }
     
-    return idealMatchDescription;
+    // Return just the ideal section
+    return combinedProfile.ideal;
   } catch (error) {
     elizaLogger.error(`Error generating ideal match profile: ${error instanceof Error ? error.message : String(error)}`);
     return null;
@@ -123,6 +102,9 @@ export async function generateIdealMatchProfile(
 
 /**
  * Generate embeddings for profile data using ElizaOS Core's embedding service
+ * This is a compatibility function that supports the old format for backward compatibility
+ * It will attempt to use the new generateCombinedProfileEmbeddings when possible
+ * 
  * @param runtime Agent runtime for embedding service 
  * @param profileData Profile data to generate embeddings for (either a complex object or an object with ideal_match_description)
  * @returns Embedding vector as number array
@@ -132,32 +114,48 @@ export async function generateProfileEmbedding(
   profileData: any
 ): Promise<number[] | null> {
   try {
-    let textToEmbed = '';
-    
     // Check if we have a simple ideal match description
     if (profileData.ideal_match_description) {
       // If we have a direct description text, use it directly
-      textToEmbed = profileData.ideal_match_description;
-    } else {
-      // Otherwise, extract from complex profile structure
-      const publicData = profileData.public || {};
-      const privateData = profileData.private || {};
-      
-      // Combine the most important semantic fields for embedding
-      textToEmbed = [
-        publicData["datalatte:summary"] || "",
-        publicData["datalatte:intentCategory"] || "",
-        publicData["datalatte:projectDescription"] || "",
-        privateData["datalatte:background"] || "",
-        privateData["datalatte:knowledgeDomain"] || "",
-        privateData?.["datalatte:hasProject"]?.["datalatte:projectDomain"] || "",
-        privateData?.["datalatte:hasProject"]?.["schema:description"] || "",
-        // Join desired connections if it's an array
-        Array.isArray(publicData["datalatte:desiredConnections"]) 
-          ? publicData["datalatte:desiredConnections"].join(" ") 
-          : (publicData["datalatte:desiredConnections"] || "")
-      ].filter(Boolean).join(" ");
+      return await embed(runtime, profileData.ideal_match_description);
     }
+    
+    // Check if we have a text-based profile structure
+    if (profileData.private && profileData.public && profileData.ideal &&
+        typeof profileData.private === 'string' && 
+        typeof profileData.public === 'string' && 
+        typeof profileData.ideal === 'string') {
+      
+      // Use the new combined profile embeddings function
+      const embeddings = await generateCombinedProfileEmbeddings(runtime, profileData);
+      if (embeddings) {
+        // Return the ideal embedding since that's what the old function would return
+        return embeddings.ideal_embedding;
+      }
+      return null;
+    }
+    
+    // Handle legacy format - extract text from the JSON-LD structure
+    let textToEmbed = '';
+    
+    // Extract from complex profile structure
+    const publicData = profileData.public || {};
+    const privateData = profileData.private || {};
+    
+    // Combine the most important semantic fields for embedding
+    textToEmbed = [
+      publicData["datalatte:summary"] || "",
+      publicData["datalatte:intentCategory"] || "",
+      publicData["datalatte:projectDescription"] || "",
+      privateData["datalatte:background"] || "",
+      privateData["datalatte:knowledgeDomain"] || "",
+      privateData?.["datalatte:hasProject"]?.["datalatte:projectDomain"] || "",
+      privateData?.["datalatte:hasProject"]?.["schema:description"] || "",
+      // Join desired connections if it's an array
+      Array.isArray(publicData["datalatte:desiredConnections"]) 
+        ? publicData["datalatte:desiredConnections"].join(" ") 
+        : (publicData["datalatte:desiredConnections"] || "")
+    ].filter(Boolean).join(" ");
     
     if (!textToEmbed.trim()) {
       elizaLogger.warn("No meaningful text found to embed for profile");
@@ -165,14 +163,7 @@ export async function generateProfileEmbedding(
     }
     
     // Use ElizaOS Core embedding service
-    const embedding = await embed(runtime, textToEmbed);
-    
-    if (embedding && embedding.length > 0) {
-      return embedding;
-    } else {
-      elizaLogger.warn("Embedding generation returned empty vector");
-      return null;
-    }
+    return await embed(runtime, textToEmbed);
   } catch (error) {
     elizaLogger.error("Error generating profile embedding:", error);
     return null;
@@ -180,12 +171,13 @@ export async function generateProfileEmbedding(
 }
 
 /**
- * Find matching profiles using MongoDB Atlas Vector Search
+ * Find matching profiles using vector similarity search
+ * 
  * @param runtime Agent runtime
- * @param idealProfileEmbedding Embedding vector for the ideal match profile
- * @param platform Platform name
- * @param username Username
- * @param state Current state or platform string
+ * @param idealProfileEmbedding Embedding vector for ideal match profile
+ * @param platform Platform to search in (e.g., "telegram")
+ * @param username Username to exclude from results
+ * @param state Current state or bot username
  * @returns Array of matching profiles
  */
 export async function findMatchingProfilesWithAtlasSearch(
@@ -196,59 +188,64 @@ export async function findMatchingProfilesWithAtlasSearch(
   state?: State | string
 ): Promise<any[]> {
   try {
+    // Get MongoDB connection info
     const connectionString = runtime.getSetting('MONGODB_CONNECTION_STRING_CKG');
     const dbName = runtime.getSetting('MONGODB_DATABASE_CKG');
+    const collectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || platform;
     
+    // Validate connection info
     if (!connectionString || !dbName) {
       elizaLogger.error('Missing MongoDB connection settings');
       return [];
     }
     
-    const client = new MongoClient(connectionString);
-    await client.connect();
-    
+    const client = await MongoClient.connect(connectionString);
     const db = client.db(dbName);
-    // Check if MONGODB_DATABASE_COLLECTION is set in environment, otherwise use platform
-    const collectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || platform;
     const collection = db.collection(collectionName);
     
-  
-    // Get the user's match history to avoid showing the same profiles again
-    const matchHistory = await getMatchHistory(
-      runtime, 
-      platform, 
-      username
-    );
+    // Get bot username to filter users from the same community
+    const myBotUsername = typeof state === 'string' 
+      ? state 
+      : (state?.agentUsername || runtime.character?.username);
     
-    // Create a list of profile IDs to exclude (user's profile + previously matched profiles)
-    const excludeList = matchHistory.map(match => ({
-      platform: match.platform,
-      username: match.username
-    }));
+    // Query exclude list (excludes self and recently matched profiles)
+    const excludeList = [
+      { platform, username }, // Exclude self
+    ];
     
-    // Add the user's own profile to the exclude list
-    excludeList.push({
-      platform,
-      username
-    });
+    // Add the user's match history to the exclude list if available
+    try {
+      const userDoc = await collection.findOne({ platform, username });
+      if (userDoc?.matchHistory) {
+        // Add matches from the last 30 days to the exclude list
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        
+        const recentMatches = userDoc.matchHistory.filter((match: any) => 
+          new Date(match.timestamp) > thirtyDaysAgo
+        );
+        
+        excludeList.push(...recentMatches);
+      }
+    } catch (error) {
+      elizaLogger.warn("Error fetching match history:", error);
+      // Continue with search even if we can't get match history
+    }
     
-    // Use Atlas Vector Search to find the top matches
-    // Try to get vector index name from dedicated environment variable first
-    // If not available, try using MONGODB_DATABASE_COLLECTION
-    // If neither is available, use the default name
-    const vectorIndexName = runtime.getSetting(MONGODB_VECTOR_INDEX_ENV_VAR) || 
-                            runtime.getSetting('MONGODB_DATABASE_COLLECTION') || 
-                            DEFAULT_VECTOR_INDEX_NAME;
+    // Get vector index name from environment
+    const vectorIndexName = runtime.getSetting('MONGODB_VECTOR_INDEX') || 'text_embedding_index';
     elizaLogger.info(`Using vector index name: ${vectorIndexName}`);
     
+    // Define the search pipeline
     const pipeline = [
       {
+        // Search against embedding (renamed from profile_embedding) in the latestProfile
         $vectorSearch: {
           index: vectorIndexName,
           path: "latestProfile.embedding",
           queryVector: idealProfileEmbedding,
           numCandidates: 100,
-          limit: 10 // Increase limit to ensure we have enough candidates after filtering
+          limit: 10
         }
       },
       {
@@ -263,11 +260,13 @@ export async function findMatchingProfilesWithAtlasSearch(
         $project: {
           platform: 1,
           username: 1,
-          "latestProfile.public": 1,
           "latestProfile.private": 1,
+          "latestProfile.public": 1,
+          "latestProfile.ideal": 1,
           "latestProfile.timestamp": 1,
           timestamp: 1,
           lastUpdated: 1,
+          telegramChatId: 1,
           score: { $meta: "vectorSearchScore" }
         }
       },
@@ -284,7 +283,8 @@ export async function findMatchingProfilesWithAtlasSearch(
       username: match.username,
       profileData: match.latestProfile,
       timestamp: match.timestamp || match.lastUpdated || new Date(),
-      score: match.score
+      score: match.score,
+      telegramChatId: match.telegramChatId
     }));
     
     await client.close();
@@ -455,20 +455,55 @@ export async function recordMatchRequest(
     const collection = db.collection(collectionName);
     
     const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     
-    // Update or create the match requests record using $addToSet instead of $push
-    const result = await collection.updateOne(
-      { platform, username },
+    // First check if there's already a match request for today
+    const userDoc = await collection.findOne(
       { 
-        $addToSet: { 
-          matchRequests: { 
-            timestamp: now,
-            count: 1
+        platform, 
+        username,
+        matchRequests: { 
+          $elemMatch: { 
+            timestamp: { 
+              $gte: today 
+            } 
           }
         }
-      },
-      { upsert: true }
+      }
     );
+    
+    let result;
+    if (userDoc) {
+      // Update existing request count for today using a type-safe approach
+      const updateDoc: Record<string, any> = {
+        $inc: {}
+      };
+      updateDoc.$inc["matchRequests.$.count"] = 1;
+      
+      result = await collection.updateOne(
+        { 
+          platform, 
+          username,
+          "matchRequests.timestamp": { $gte: today }
+        },
+        updateDoc
+      );
+    } else {
+      // Add a new request record using a type-safe approach
+      const updateDoc: Record<string, any> = {
+        $push: {}
+      };
+      updateDoc.$push.matchRequests = {
+        timestamp: now,
+        count: 1
+      };
+      
+      result = await collection.updateOne(
+        { platform, username },
+        updateDoc,
+        { upsert: true }
+      );
+    }
     
     await client.close();
     
@@ -481,6 +516,7 @@ export async function recordMatchRequest(
 
 /**
  * Store matches in user's profile to avoid repetition
+ * Also records bidirectional matches - both user->match and match->user
  * @param runtime Agent runtime
  * @param userPlatform User platform
  * @param userUsername User username
@@ -510,38 +546,81 @@ export async function recordMatches(
     await client.connect();
     
     const db = client.db(dbName);
-    const collection = db.collection(userPlatform);
     
-    const now = new Date();
-    
-    // Format the matches with timestamps
-    const matchesWithTimestamp = matches.map(match => ({
-      platform: match.platform,
-      username: match.username,
-      timestamp: now
-    }));
-    
-    // Add matches to user's match history one by one to avoid complex update operators
-    let success = true;
-    for (const match of matchesWithTimestamp) {
-      const result = await collection.updateOne(
-        { platform: userPlatform, username: userUsername },
-        { 
-          $addToSet: { 
-            matchHistory: match
-          }
-        },
-        { upsert: true }
+    try {
+      // Create an array of operations to perform
+      const operations = [];
+      const now = new Date();
+      
+      // 1. Format the matches with timestamps for the current user
+      const matchesWithTimestamp = matches.map(match => ({
+        platform: match.platform,
+        username: match.username,
+        timestamp: now
+      }));
+      
+      // 2. Add matches to current user's match history
+      const userCollectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || userPlatform;
+      const userCollection = db.collection(userCollectionName);
+      
+      const userUpdate: Record<string, any> = {
+        $push: {}
+      };
+      userUpdate.$push.matchHistory = { $each: matchesWithTimestamp };
+      
+      operations.push(
+        userCollection.updateOne(
+          { platform: userPlatform, username: userUsername },
+          userUpdate,
+          { upsert: true }
+        )
       );
       
-      if (!result.acknowledged) {
-        success = false;
+      // 3. Add current user to each matched user's history
+      for (const match of matches) {
+        // The current user's profile data to add to the matched user's history
+        const currentUserMatchData = {
+          platform: userPlatform,
+          username: userUsername,
+          timestamp: now
+        };
+        
+        // Get the appropriate collection for the matched user (could be on a different platform)
+        const matchedUserCollectionName = runtime.getSetting('MONGODB_DATABASE_COLLECTION') || match.platform;
+        const matchedUserCollection = db.collection(matchedUserCollectionName);
+        
+        // Prepare update for matched user
+        const matchedUserUpdate: Record<string, any> = {
+          $push: {}
+        };
+        matchedUserUpdate.$push.matchHistory = { $each: [currentUserMatchData] };
+        
+        operations.push(
+          matchedUserCollection.updateOne(
+            { platform: match.platform, username: match.username },
+            matchedUserUpdate,
+            { upsert: true }
+          )
+        );
+        
+        elizaLogger.info(`Recording bidirectional match: ${userUsername} <-> ${match.username}`);
       }
+      
+      // Execute all operations
+      const results = await Promise.all(operations);
+      
+      // Check if all operations were successful
+      const allSuccessful = results.every(result => result.acknowledged);
+      
+      elizaLogger.info(
+        `Recorded ${matches.length} bidirectional matches for ${userUsername} on ${userPlatform}: ${allSuccessful ? 'success' : 'partial failure'}`
+      );
+      
+      return allSuccessful;
+    } finally {
+      // Ensure connection is closed even if operation fails
+      await client.close();
     }
-    
-    await client.close();
-    
-    return success;
   } catch (error) {
     elizaLogger.error('Error recording matches:', error);
     return false;
@@ -721,6 +800,138 @@ async function getUserProfile(runtime: IAgentRuntime, username: string): Promise
     return profile as unknown as ProfileData;
   } catch (error) {
     elizaLogger.error(`Error retrieving profile for ${username}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Generate combined profile content using the new text-based approach
+ * Creates private, public, and ideal match sections in one call
+ * 
+ * @param runtime Agent runtime
+ * @param userProfileData Existing user profile data (can be empty/null for new users)
+ * @param state Current state with conversation context
+ * @returns Object with private, public, and ideal text sections, or null if generation fails
+ */
+export async function generateCombinedProfile(
+  runtime: IAgentRuntime,
+  userProfileData: any,
+  state?: State
+): Promise<{
+  private: string;
+  public: string;
+  ideal: string;
+  analysis: { 
+    matchType: 'exact_match' | 'update_existing' | 'new_information';
+    reason: string; 
+  };
+} | null> {
+  try {
+    elizaLogger.debug('Generating combined profile with all three components');
+    
+    // Update state with recent messages if not present
+    if (state && !state.recentMessages) {
+      state = await runtime.updateRecentMessageState(state);
+    }
+
+    // Prepare context
+    const contextData = {
+      shaclShapes: SHACL_SHAPES,
+      userProfileData: JSON.stringify(userProfileData || {}, null, 2),
+      username: state?.username || '',
+      platform: state?.platform || '',
+      recentMessages: state?.recentMessages || []
+    };
+    
+    // Log minimal info about profile generation input
+    elizaLogger.info(`Generating profile for ${contextData.username} on ${contextData.platform}`);
+
+    const context = composeContext({
+      template: COMBINED_PROFILE_TEMPLATE,
+      state: contextData as any
+    });
+    
+    // Log raw prompt content
+    elizaLogger.info(`RAW_PROFILE_PROMPT: ${context}`);
+
+    const combinedProfileResult = await generateObjectArray({
+      runtime,
+      context,
+      modelClass: ModelClass.LARGE
+    });
+    
+    // Log raw LLM response
+    elizaLogger.info(`RAW_PROFILE_RESPONSE: ${JSON.stringify(combinedProfileResult)}`);
+
+    if (!combinedProfileResult?.length) {
+      elizaLogger.error("Failed to generate combined profile: empty result");
+      return null;
+    }
+
+    // Extract the sections from the result
+    const result = combinedProfileResult[0];
+    
+    // Log minimal info about profile generation result
+    elizaLogger.info(`Profile generated for ${contextData.username} with match type: ${result.analysis?.matchType || 'unknown'}`);
+    
+    if (!result.private || !result.public || !result.ideal || !result.analysis) {
+      elizaLogger.error("Invalid combined profile format: missing required sections", result);
+      return null;
+    }
+    
+    return {
+      private: result.private,
+      public: result.public,
+      ideal: result.ideal,
+      analysis: result.analysis
+    };
+  } catch (error) {
+    elizaLogger.error(`Error generating combined profile: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+/**
+ * Generate embeddings from the new text-based profile structure
+ * Creates two embeddings: one for profile (private+public) and one for ideal match
+ * 
+ * @param runtime Agent runtime for embedding service
+ * @param profileData Object containing private, public, and ideal text sections
+ * @returns Object containing profile and ideal match embeddings, or null if generation fails
+ */
+export async function generateCombinedProfileEmbeddings(
+  runtime: IAgentRuntime,
+  profileData: {
+    private: string;
+    public: string;
+    ideal: string;
+  }
+): Promise<{
+  embedding: number[];
+  ideal_embedding: number[];
+} | null> {
+  try {
+    // Combine private and public sections for the profile embedding
+    const profileText = `${profileData.private} ${profileData.public}`;
+    
+    // Generate embedding for the combined profile text
+    const profileEmbedding = await embed(runtime, profileText);
+    
+    // Generate embedding for the ideal match text
+    const idealEmbedding = await embed(runtime, profileData.ideal);
+    
+    if (!profileEmbedding || profileEmbedding.length === 0 || 
+        !idealEmbedding || idealEmbedding.length === 0) {
+      elizaLogger.warn("Failed to generate one or both embeddings for combined profile");
+      return null;
+    }
+    
+    return {
+      embedding: profileEmbedding,
+      ideal_embedding: idealEmbedding
+    };
+  } catch (error) {
+    elizaLogger.error("Error generating combined profile embeddings:", error);
     return null;
   }
 } 
