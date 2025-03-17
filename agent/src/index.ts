@@ -1018,7 +1018,7 @@ export async function createAgent(
         evaluators: [],
         character,
         // character.plugins are handled when clients are added
-        plugins: [databaristaPlugin]
+        plugins: [nodePlugin, databaristaPlugin]
             .flat()
             .filter(Boolean),
         providers: [],
